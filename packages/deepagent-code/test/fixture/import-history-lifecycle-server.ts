@@ -10,7 +10,7 @@ import { importServer, importSource } from "./import-job"
 import { importFixtureSourceInventory, publishImportFixturePacket } from "../../../app/test/components/fixture/import-control"
 
 const root = process.argv[2]!
-const observations = { count: 0, monitor: false, job: "", receipt: "", error: "" }
+const observations = { count: 0, monitor: false, job: "", receipt: "", error: "", terminalError: "" }
 const stage = (
   phase: string,
   facts: {
@@ -19,6 +19,8 @@ const stage = (
     hasSourceDigest?: boolean
     committedBatches?: number
     activeBatch?: "prepare" | "other" | "none"
+    error_code?: string
+    error_detail?: string
     available?: boolean
     count?: number
     tag?: string
@@ -116,7 +118,16 @@ await Effect.runPromise(
             hasSourceDigest: Boolean(row?.source_digest),
             committedBatches: row?.committed_batches,
             activeBatch: row?.active_batch_id === "prepare" ? "prepare" : row?.active_batch_id ? "other" : "none",
+            error_code: row?.error_code?.slice(0, 128),
+            error_detail: row?.error_detail?.slice(0, 2048),
           } satisfies Parameters<typeof stage>[1]
+          if (row?.state === "failed" || row?.state === "recovery_required") {
+            const terminal = JSON.stringify({ jobID: row.job_id, ...facts })
+            if (observations.terminalError !== terminal) {
+              observations.terminalError = terminal
+              console.error("IMPORT_LIFECYCLE_TERMINAL_ERROR", terminal)
+            }
+          }
           if (observations.job !== JSON.stringify(facts)) {
             observations.job = JSON.stringify(facts)
             stage("original-job-observed", facts)

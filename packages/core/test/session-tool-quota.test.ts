@@ -213,17 +213,21 @@ test("domain Session capacity and UTF-8 reference bounds fail before a new quota
       const events = yield* EventV2.Service
       const definition = EventV2.definitions().find((item) => item.type === "session.domain_pack.loaded")!
       trace("capacity-seed-start")
-      yield* Effect.forEach(
-        Array.from({ length: 4095 }, (_, index) => index),
-        (index) =>
-          events.publish(definition, {
-            sessionID,
-            assistantMessageID: `msg_retained_${index}`,
-            toolCallID: `held_${index}`,
-            ref: `doc:retained_${index}`,
-          }),
-        { discard: true },
-      )
+      // Commit fixture history once; every fact still runs the original publisher and sync index.
+      yield* db.transaction(
+        () => Effect.forEach(
+          Array.from({ length: 4095 }, (_, index) => index),
+          (index) =>
+            events.publish(definition, {
+              sessionID,
+              assistantMessageID: `msg_retained_${index}`,
+              toolCallID: `held_${index}`,
+              ref: `doc:retained_${index}`,
+            }),
+          { discard: true },
+        ),
+        { behavior: "immediate" },
+      ).pipe(Effect.orDie)
       trace("capacity-seed-complete")
       const full = yield* load(tool, fresh.id, "full", "next").pipe(Effect.result)
       expect(full._tag).toBe("Failure")

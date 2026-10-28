@@ -295,6 +295,8 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     hasSourceDigest?: boolean
     committedBatches?: number
     activeBatch?: "prepare" | "other" | "none"
+    error_code?: string
+    error_detail?: string
     deadlineAt?: number
     code?: number | null
   }[] = []
@@ -305,7 +307,12 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     if (observations.length < 128)
       observations.push({ phase, at: Date.now(), elapsedMs: Date.now() - progress.startedAt, pid: child.pid, ...facts })
   }
-  const observed = { copy: "", jobID: "", backup: undefined as ReturnType<typeof backupState> | undefined }
+  const observed = {
+    copy: "",
+    jobID: "",
+    backup: undefined as ReturnType<typeof backupState> | undefined,
+    terminalError: undefined as { jobID: string; state: string; error_code?: string; error_detail?: string } | undefined,
+  }
   observe("spawn", { deadlineAt: progress.startedAt + 25000 })
   let output = ""
   child.stdout?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
@@ -328,6 +335,7 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
       resultFiles: (await fs.readdir(root)).filter((name) => name.endsWith(".json")),
       startup: await fs.readFile(path.join(root, "startup.jsonl"), "utf8").catch(() => null),
       observations,
+      terminalError: observed.terminalError,
       backup: await (observed.backup ??= backupState(root, observed.jobID)),
       output,
     })
@@ -407,7 +415,16 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
           hasSourceDigest: Boolean(current.data?.sourceDigest),
           committedBatches: current.data?.committedBatches,
           activeBatch: current.data?.activeBatchID === "prepare" ? "prepare" : current.data?.activeBatchID ? "other" : "none",
+          error_code: current.data?.error?.code.slice(0, 128),
+          error_detail: current.data?.error?.message.slice(0, 2048),
         } satisfies Parameters<typeof observe>[1]
+        if (current.data?.state === "failed" || current.data?.state === "recovery_required")
+          observed.terminalError = {
+            jobID: current.data.id,
+            state: current.data.state,
+            error_code: facts.error_code,
+            error_detail: facts.error_detail,
+          }
         if (observed.copy !== JSON.stringify(facts)) {
           observed.copy = JSON.stringify(facts)
           observe("copy-observed", facts)

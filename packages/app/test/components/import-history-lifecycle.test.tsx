@@ -104,7 +104,12 @@ async function processFor(root: string, count: number) {
     deadlineAt?: number
     code?: number | null
   }[] = []
-  const observed = { jobID: "", backup: undefined as ReturnType<typeof backupState> | undefined }
+  const observed = {
+    jobID: "",
+    backup: undefined as ReturnType<typeof backupState> | undefined,
+    terminalError: "",
+    errorOutput: "",
+  }
   const observe = (
     phase: string,
     facts: Omit<(typeof observations)[number], "phase" | "at" | "elapsedMs" | "pid"> = {},
@@ -122,6 +127,14 @@ async function processFor(root: string, count: number) {
   })
   child.stderr?.on("data", (value: Buffer) => {
     stderr = (stderr + value.toString()).slice(-65536)
+    observed.errorOutput = (observed.errorOutput + value.toString()).slice(-8192)
+    const lines = observed.errorOutput.split(/\r?\n/)
+    observed.errorOutput = lines.pop() ?? ""
+    for (const line of lines) {
+      if (!line.startsWith("IMPORT_LIFECYCLE_TERMINAL_ERROR ") || line.length > 4096) continue
+      observed.terminalError = line
+      console.error(line)
+    }
   })
   child.once("error", (error) => {
     spawnError = error.message
@@ -141,6 +154,7 @@ async function processFor(root: string, count: number) {
       spawnError,
       deadlineExpired: timeout.fired,
       observations,
+      terminalError: observed.terminalError,
       backup: await (observed.backup ??= backupState(root, observed.jobID)),
       readyPath: path.join(root, "ready.json"),
       resultFiles: (await fs.readdir(root))
