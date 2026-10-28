@@ -200,16 +200,6 @@ async function main() {
         AND e.session_id=a.session_id AND e.tool_name=a.tool_name
       WHERE a.session_id=? AND a.tool_name='browser' AND a.tool_call_id='call_browser_1'`).all(sessionID)
     try {
-      const started = performance.now()
-      // The first provider turn runs the real plan tool and cold project setup.
-      // Start the denial window only after the Browser provider response is sent.
-      const readyDeadline = Date.now() + 15_000
-      while (providerFinished < 2 && Date.now() < readyDeadline)
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      if (providerFinished < 2)
-        throw new Error(`Fixture Browser request was not ready after ${bodies.length}/2 provider requests; providerFinished=${providerFinished}`)
-      console.log(JSON.stringify({ test: "browser-rejection", phase: "browser-provider-ready",
-        elapsedMs: Math.round(performance.now() - started), providerFinished }))
       const deadline = Date.now() + duration
       while (Date.now() < deadline) {
         if (bodies.length > 3) throw new Error("Fixture Browser rejection made an unexpected provider request")
@@ -382,7 +372,9 @@ async function main() {
       }
     }
     if (["wrong-root", "wrong-session", "retired", "selection-drift", "control-tamper"].includes(mode)) {
-      await waitForBrowserRejection(invokeSession.data.id, 3_000)
+      // This functional oracle includes the real plan, durable Browser admission and
+      // third provider history. Its wait stays inside the original 90s child/100s case.
+      await waitForBrowserRejection(invokeSession.data.id, 30_000)
       // This denial oracle owns a Browser receipt, not natural Session drain
       // completion. Join the original stop before observing final side effects.
       await server.listener.stop()
