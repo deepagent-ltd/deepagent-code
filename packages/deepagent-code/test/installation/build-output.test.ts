@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { prepareBuildOutput } from "../../script/build-output"
 
 test("default build preserves the exact prior candidate while private output rejects existing paths", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-build-output-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-build-output-")))
   try {
     await fs.mkdir(path.join(root, "dist"))
     await fs.writeFile(path.join(root, "dist/old-candidate"), "original candidate bytes")

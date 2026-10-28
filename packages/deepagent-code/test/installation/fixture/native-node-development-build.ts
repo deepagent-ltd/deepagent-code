@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHash } from "node:crypto"
 import { Schema } from "effect"
 
@@ -31,10 +32,18 @@ const rootFiles = [
  * an immutable private copy, so the original build cannot write repository dist. */
 export async function prepare() {
   const repository = path.resolve(import.meta.dir, "../../../../..")
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-native-node-development-"))
+  const temporary = process.platform === "win32"
+    ? path.join(repository, "packages/deepagent-code/.artifacts/windows-native-node-development") : os.tmpdir()
+  if (process.platform === "win32" && path.win32.parse(temporary).root.toUpperCase() !== "D:\\")
+    throw new Error("Windows development builds must stay on D:")
+  await fs.mkdir(temporary, { recursive: true })
+  const root = await fs.realpath(await fs.mkdtemp(path.join(temporary, "dac-native-node-development-")))
   await fs.chmod(root, 0o700)
   const copy = path.join(root, "repository")
-  const listed = Bun.spawnSync(["/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+  const selectedGit = Bun.which("git")
+  if (!selectedGit) throw new Error("The actual Git executable is unavailable")
+  const git = await fs.realpath(selectedGit)
+  const listed = Bun.spawnSync([git, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
     cwd: repository,
     stdout: "pipe",
     stderr: "pipe",
@@ -112,21 +121,26 @@ export async function prepare() {
     })
     for (const entry of entries) {
       if (entry === "@deepagent-code" || workspace.some((value) => value.name === entry)) continue
-      await fs.symlink(path.join(source, entry), path.join(destination, entry))
+      const target = path.join(source, entry)
+      await fs.symlink(target, path.join(destination, entry), process.platform === "win32"
+        ? (await fs.stat(target)).isDirectory() ? "junction" : "file" : undefined)
     }
     await Promise.all(
       workspace.map(async (entry) => {
         const target = path.join(destination, entry.name)
         await fs.mkdir(path.dirname(target), { recursive: true })
-        await fs.symlink(entry.directory, target)
+        await fs.symlink(entry.directory, target, process.platform === "win32" ? "junction" : "dir")
       }),
     )
   }
   const bin = path.join(root, "bin")
   await fs.mkdir(bin)
-  await fs.symlink(await fs.realpath(process.execPath), path.join(bin, "bun"))
+  if (process.platform === "win32") await fs.copyFile(await fs.realpath(process.execPath), path.join(bin, "bun.exe"))
+  if (process.platform !== "win32") await fs.symlink(await fs.realpath(process.execPath), path.join(bin, "bun"))
   const home = path.join(root, "home")
   await fs.mkdir(home, { mode: 0o700 })
+  if (process.platform === "win32") await Promise.all(["appdata", "localappdata", "bun-cache"].map((name) =>
+    fs.mkdir(path.join(home, name), { mode: 0o700 })))
   const output = path.join(copy, "packages/deepagent-code/dist/node")
   await fs.mkdir(output, { recursive: true })
   // Stale metadata is deliberately invalid; this test does not create a publisher.
@@ -140,7 +154,8 @@ export async function prepare() {
         repository,
         copy,
         components: manifest.toSorted((left, right) => left.path.localeCompare(right.path)),
-        dependencies: "local ARM third-party symlinks; workspace packages resolve exclusively to private source copy",
+        git,
+        dependencies: `local ${process.platform}-${process.arch} third-party links; workspace packages resolve exclusively to private source copy`,
       },
       null,
       2,
@@ -150,16 +165,25 @@ export async function prepare() {
   return { root, copy, output, manifest, home, bin }
 }
 
+export function environment(input: { root: string; bin: string; home: string }) {
+  return {
+    PATH: input.bin, HOME: input.home, TMPDIR: input.root,
+    ...(process.platform === "win32" ? {
+      USERPROFILE: input.home, APPDATA: path.join(input.home, "appdata"), LOCALAPPDATA: path.join(input.home, "localappdata"),
+      TEMP: input.root, TMP: input.root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(input.home, "bun-cache"),
+      SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, WINDIR: process.env.WINDIR,
+    } : {}),
+  }
+}
+
 export async function build(
   input: Pick<Awaited<ReturnType<typeof prepare>>, "root" | "copy" | "output" | "home" | "bin">,
   options?: { publicKey?: string; authorizationFile?: string; required?: boolean; version?: string },
 ) {
-  const child = Bun.spawn([path.join(input.bin, "bun"), "script/build-node.ts"], {
+  const child = Bun.spawn([path.join(input.bin, process.platform === "win32" ? "bun.exe" : "bun"), "script/build-node.ts"], {
     cwd: path.join(input.copy, "packages/deepagent-code"),
     env: {
-      PATH: input.bin,
-      HOME: input.home,
-      TMPDIR: input.root,
+      ...environment(input),
       XDG_CONFIG_HOME: path.join(input.home, "config"),
       XDG_DATA_HOME: path.join(input.home, "data"),
       XDG_CACHE_HOME: path.join(input.home, "cache"),
@@ -194,7 +218,7 @@ export async function build(
         NativeExecution: 0,
         provider: 0,
         database: 0,
-        buildScope: "actual original build-node.ts; private source/output; Darwin ARM module only",
+        buildScope: `actual original build-node.ts; private source/output; ${process.platform}-${process.arch} module only`,
       },
       null,
       2,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { runValidationCommands, validationInvocation, type ShellProbe } from "../../src/deepagent/validation-exec"
+import { Shell } from "../../src/shell/shell"
 
 // V3.2 P2-5 regression guard: a validation command that never exits must NOT hang the runner.
 // The timeout sentinel must kill the process and resolve to a failed ValidationResult within
@@ -147,10 +148,15 @@ describe("V3.2 validation-exec timeout", () => {
     expect(wsl1[0]).toMatchObject({ passed: false, kind: "unsupported_platform" })
     expect(wsl1[0]!.output).toContain("WSL1")
 
+    // The injected Linux gate still runs on the actual test host. Supply its
+    // real POSIX interpreter on Windows instead of inventing a /bin/sh there.
+    const shell = process.platform === "win32" ? Shell.gitbash() : undefined
+    if (process.platform === "win32") expect(shell).toBeDefined()
     const wsl2 = await runValidationCommands(["exit 0"], process.cwd(), 5000, {
       platform: "linux",
       release: "6.6.87.2-microsoft-standard-WSL2",
       env: { WSL_DISTRO_NAME: "Ubuntu" },
+      shell,
     })
     expect(wsl2[0]).toMatchObject({ passed: true, kind: "command_exit", exit_code: 0 })
   })

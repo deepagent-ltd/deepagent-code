@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash } from "node:crypto"
-import { prepare, build, readEvidence } from "./fixture/native-node-development-build"
+import { prepare, build, readEvidence, environment } from "./fixture/native-node-development-build"
 
 test("ordinary Node development build needs no Cargo or publisher and removes stale Native metadata", async () => {
   const replay = process.env.DAC_NATIVE_NODE_DEVELOPMENT_REPLAY
@@ -63,7 +63,7 @@ test("ordinary Node development build needs no Cargo or publisher and removes st
         assertionReplay: Boolean(replay),
         newBuildsInReplay: 0,
         boundary:
-          "actual original Node-targeted build on local Darwin ARM; not Windows/Desktop runtime or Native capability",
+          `actual original Node-targeted build on ${process.platform}-${process.arch}; not Desktop runtime or Native capability`,
       },
       null,
       2,
@@ -90,7 +90,7 @@ test("Node builds compile an ephemeral owner public pin and reject incomplete is
     ],
     {
       cwd: path.join(input.copy, "packages/deepagent-code"),
-      env: { PATH: input.bin, HOME: input.home, TMPDIR: input.root },
+      env: environment(input),
       stdout: "pipe",
       stderr: "pipe",
     },

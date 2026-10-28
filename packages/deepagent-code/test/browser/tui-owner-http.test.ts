@@ -1,15 +1,19 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { createRequire } from "node:module"
 
-test("actual Node HTTP TUI owner endpoints cannot mint a Desktop origin with Basic authentication alone", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-tui-owner-http-"))
+test(process.platform === "win32"
+  ? "unsealed Node HTTP TUI owner endpoints cannot mint a Desktop origin with Basic authentication alone"
+  : "actual Node HTTP TUI owner endpoints cannot mint a Desktop origin with Basic authentication alone", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-tui-owner-http-")))
   await fs.chmod(root, 0o700)
-  await fs.symlink(
-    path.resolve(import.meta.dir, "../../../desktop/node_modules"),
-    path.join(root, "node_modules"),
-    "dir",
-  )
+  const require = createRequire(await fs.realpath(path.resolve(import.meta.dir, "../../../desktop/package.json")))
+  await fs.mkdir(path.join(root, "node_modules/@lydell"), { recursive: true })
+  await Promise.all(["jsonc-parser", "@lydell/node-pty"].map(async (name) =>
+    fs.symlink(await fs.realpath(path.dirname(require.resolve(`${name}/package.json`))),
+      path.join(root, "node_modules", name), process.platform === "win32" ? "junction" : "dir")))
   const build = await Bun.build({
     entrypoints: [path.join(import.meta.dir, "fixture/tui-owner-http.ts")],
     outdir: root,
@@ -36,13 +40,14 @@ test("actual Node HTTP TUI owner endpoints cannot mint a Desktop origin with Bas
       XDG_CACHE_HOME: path.join(root, "cache"),
       XDG_STATE_HOME: path.join(root, "state"),
       DEEPAGENT_CODE_HOME: path.join(root, "data"),
-      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+      DEEPAGENT_CODE_TEST_HOME: process.platform === "win32" ? root : path.join(root, "home"),
       DEEPAGENT_CODE_DB: path.join(root, "authority.sqlite"),
       DEEPAGENT_CODE_SERVER_USERNAME: "operator",
       DEEPAGENT_CODE_SERVER_PASSWORD: "private-fixture",
       DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
       DEEPAGENT_IM_AGENT_RESPONDER: "off",
       DAC_BROWSER_TEST_ROOT: root,
+      ...(process.platform === "win32" ? { DAC_UNSEALED_TEST_ROOT: root } : {}),
       NO_COLOR: "1",
     },
     stdout: "pipe",
@@ -57,6 +62,11 @@ test("actual Node HTTP TUI owner endpoints cannot mint a Desktop origin with Bas
   clearTimeout(timeout)
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   expect({ code, error: code ? stderr : null }).toEqual({ code: 0, error: null })
+  if (process.platform === "win32") expect(await Bun.file(path.join(root, "safequalification.json")).json()).toEqual({
+    kind: "unsealed-canonical-test-assembly-v1", productionServerListen: false,
+    privateSettings: "absent-only-read; publish-and-parent-refused", nativeQualification: "not-provided",
+    sealedWorkQualification: "not-provided", routeGraph: "original-HttpApiApp.createRoutes",
+  })
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.results.map((entry: { status: number }) => entry.status)).toEqual([503, 503, 503, 503, 503])
   expect(result.results.every((entry: { body: string }) => entry.body.includes("BROWSER_HOST_UNAVAILABLE"))).toBe(true)
