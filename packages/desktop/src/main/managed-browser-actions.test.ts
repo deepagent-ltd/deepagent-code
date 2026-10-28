@@ -23,7 +23,7 @@ app.on("window-all-closed",()=>{})
 const server=createServer((_req,res)=>res.end('<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
 const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
-const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),state:await inputState(contents,id)}))
+const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),windowFocused:BrowserWindow.fromWebContents(contents)?.isFocused(),contentsFocused:contents.isFocused(),state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -33,9 +33,23 @@ async function main(){
   await contents.loadURL('http://127.0.0.1:'+server.address().port)
   // Match the production dynamic-action visibility/focus precondition on Xvfb.
   if(process.platform==='linux'){
-   window.show()
-   contents.focus()
-   if(!await contents.executeJavaScript('document.visibilityState==="visible" && document.hasFocus()'))throw new Error('MANAGED_BROWSER_INPUT_FIXTURE_NOT_READY')
+   const nativeFocus=(stage)=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original-native-focus',stage,windowVisible:window.isVisible(),windowFocused:window.isFocused(),contentsFocused:contents.isFocused()}))
+   nativeFocus('before')
+   // DOM document.hasFocus() alone does not establish the OS top-level input focus.
+   await new Promise((resolve,reject)=>{
+    const dispose=()=>{clearTimeout(timer);window.removeListener('focus',ready);contents.removeListener('focus',ready)}
+    const ready=()=>{if(!window.isFocused()||!contents.isFocused())return;dispose();resolve(undefined)}
+    const timer=setTimeout(()=>{dispose();nativeFocus('timeout');reject(new Error('MANAGED_BROWSER_INPUT_FIXTURE_NATIVE_FOCUS_TIMEOUT'))},1000)
+    window.on('focus',ready)
+    contents.on('focus',ready)
+    window.show()
+    window.focus()
+    contents.focus()
+    ready()
+   })
+   const documentFocus=await contents.executeJavaScript('({visible:document.visibilityState==="visible",focused:document.hasFocus()})')
+   console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original-native-focus',stage:'ready',windowVisible:window.isVisible(),windowFocused:window.isFocused(),contentsFocused:contents.isFocused(),documentFocus}))
+   if(!window.isFocused()||!contents.isFocused()||!documentFocus.visible||!documentFocus.focused)throw new Error('MANAGED_BROWSER_INPUT_FIXTURE_NOT_READY')
   }
   contents.debugger.attach('1.3')
   await contents.debugger.sendCommand('Page.enable')
@@ -70,7 +84,7 @@ async function main(){
   try{await helper.execute({type:'click',...target(hovered,'Go')})}catch(e){result.errors.push(e.message)}
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
-  if(process.platform==='linux'||${diagnosticAB}){
+  if(${diagnosticAB}){
    // Diagnostic input stays in a separate owned page after the original business flow.
    const diagnostic=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
    const probe=diagnostic.webContents
