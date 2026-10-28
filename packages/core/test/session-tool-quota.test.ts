@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import path from "node:path"
 import { rename, writeFile } from "node:fs/promises"
 import { and, count, eq } from "drizzle-orm"
@@ -18,7 +18,7 @@ import { DomainPackLoadTool } from "../src/system-context/domain-pack-load-tool"
 import { KnowledgeProposeTool } from "../src/tool/knowledge-propose"
 import { Tool } from "../src/tool/tool"
 import { quotaLayer, seedQuotaSession } from "./fixture/tool-quota"
-import { tmpRoot } from "./fixture/tmpdir"
+import { tmpdir, tmpRoot } from "./fixture/tmpdir"
 
 const sessionID = SessionSchema.ID.make("ses_actual_tool_quota")
 const context = (toolCallID: string, turn = "one"): Tool.Context => ({
@@ -292,128 +292,161 @@ test("knowledge staging failure retains its reservation across restart and exact
   )
 })
 
-test("original snapshot export/import preserves quota facts and conflicting or tampered imports roll back", async () => {
-  const started = performance.now()
-  const trace = (phase: string) => console.error(JSON.stringify({
-    test: "quota-snapshot", phase, elapsedMs: Math.round(performance.now() - started),
-  }))
-  trace("start")
-  const directory = tmpRoot()
-  const store = new DurableKnowledgeStore(path.join(directory, "knowledge"))
-  const docs = ["a", "b", "c"].map((key) => seed(store, key))
-  const domain = DomainPackLoadTool.makeDomainPackLoadTool({ store: () => store })
-  const knowledge = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
-  trace("source-layer-open-start")
-  const bundle = await Effect.runPromise(
-    Effect.gen(function* () {
-      trace("source-layer-ready")
-      yield* seedQuotaSession(sessionID, directory)
-      yield* load(domain, docs[0]!.id, "load_a")
-      yield* load(domain, docs[1]!.id, "load_b")
-      yield* Effect.forEach(
-        Array.from({ length: 10 }, (_, index) => `stage_${index}`),
-        (id) => propose(knowledge, id),
-        { discard: true },
-      )
-      trace("source-quota-facts-complete")
-      const db = (yield* Database.Service).db
-      const events = yield* EventV2.Service
-      const seq = (yield* db
-        .select()
-        .from(EventSequenceTable)
-        .where(eq(EventSequenceTable.aggregate_id, sessionID))
-        .get()
-        .pipe(Effect.orDie))!.seq
-      const snapshot = yield* events.checkpoint({
-        aggregateID: sessionID,
-        throughSeq: EventV2.Cursor.make(seq),
-        expectedLatest: EventV2.Cursor.make(seq),
-        codec: "session-projection",
-        schemaVersion: 1,
-      })
-      expect(Schema.decodeUnknownSync(EventV2.SnapshotManifest)(snapshot.body).tables.quota_event).toBe(12)
-      trace("source-export-start")
-      const exported = yield* events.exportSnapshotBundle!({ snapshotID: snapshot.snapshotID })
-      trace("source-body-done")
-      return exported
-    }).pipe(Effect.provide(quotaLayer(path.join(directory, "source.sqlite"))), Effect.scoped),
-  )
-  trace("source-scope-closed")
-  const proposed = store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))
-  trace("import-layer-open-start")
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      trace("import-layer-ready")
-      yield* seedQuotaSession(sessionID, directory)
-      const events = yield* EventV2.Service
-      const malformed = JSON.parse(bundle)
-      malformed.snapshot.aggregateID = "ses_foreign_quota"
-      expect((yield* events.importSnapshotBundle!(JSON.stringify(malformed)).pipe(Effect.exit))._tag).toBe("Failure")
-      trace("import-malformed-refused")
-      yield* events.importSnapshotBundle!(bundle)
-      trace("import-bundle-complete")
-      const db = (yield* Database.Service).db
-      expect(
-        (yield* db
-          .select({ value: count() })
+describe("quota snapshot fixture", () => {
+  const snapshot: { root?: Awaited<ReturnType<typeof tmpdir>> } = {}
+
+  beforeAll(async () => {
+    const started = performance.now()
+    const trace = (phase: string) => console.error(JSON.stringify({
+      test: "quota-snapshot-setup", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    snapshot.root = await tmpdir()
+    trace("empty-schema-prepare-start")
+    // Prepare only official empty schemas. All Session/quota writes, export/import and
+    // rollback assertions remain in the original case, which reopens each independent DB.
+    await Effect.runPromise(
+      Effect.forEach(["source", "import", "conflict"], (name) =>
+        Effect.gen(function* () {
+          trace(`${name}-schema-open`)
+          yield* Database.Service.pipe(
+            Effect.asVoid,
+            Effect.provide(Database.layerFromPath(path.join(snapshot.root!.path, `${name}.sqlite`))),
+            Effect.scoped,
+          )
+          trace(`${name}-schema-closed`)
+        }),
+        { concurrency: 1, discard: true },
+      ).pipe(Effect.timeout("110 seconds")),
+    )
+    trace("empty-schema-prepare-complete")
+  }, 120_000)
+
+  afterAll(async () => { await snapshot.root?.[Symbol.asyncDispose]() })
+
+  test("original snapshot export/import preserves quota facts and conflicting or tampered imports roll back", async () => {
+    const started = performance.now()
+    const trace = (phase: string) => console.error(JSON.stringify({
+      test: "quota-snapshot", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    trace("start")
+    const directory = snapshot.root?.path
+    if (!directory) throw new Error("Owned snapshot schema fixture is unavailable")
+    const store = new DurableKnowledgeStore(path.join(directory, "knowledge"))
+    const docs = ["a", "b", "c"].map((key) => seed(store, key))
+    const domain = DomainPackLoadTool.makeDomainPackLoadTool({ store: () => store })
+    const knowledge = KnowledgeProposeTool.makeKnowledgeProposeTool({ globalStore: () => store })
+    trace("source-layer-open-start")
+    const bundle = await Effect.runPromise(
+      Effect.gen(function* () {
+        trace("source-layer-ready")
+        yield* seedQuotaSession(sessionID, directory)
+        yield* load(domain, docs[0]!.id, "load_a")
+        yield* load(domain, docs[1]!.id, "load_b")
+        yield* Effect.forEach(
+          Array.from({ length: 10 }, (_, index) => `stage_${index}`),
+          (id) => propose(knowledge, id),
+          { discard: true },
+        )
+        trace("source-quota-facts-complete")
+        const db = (yield* Database.Service).db
+        const events = yield* EventV2.Service
+        const seq = (yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .get()
+          .pipe(Effect.orDie))!.seq
+        const snapshot = yield* events.checkpoint({
+          aggregateID: sessionID,
+          throughSeq: EventV2.Cursor.make(seq),
+          expectedLatest: EventV2.Cursor.make(seq),
+          codec: "session-projection",
+          schemaVersion: 1,
+        })
+        expect(Schema.decodeUnknownSync(EventV2.SnapshotManifest)(snapshot.body).tables.quota_event).toBe(12)
+        trace("source-export-start")
+        const exported = yield* events.exportSnapshotBundle!({ snapshotID: snapshot.snapshotID })
+        trace("source-body-done")
+        return exported
+      }).pipe(Effect.provide(quotaLayer(path.join(directory, "source.sqlite"))), Effect.scoped),
+    )
+    trace("source-scope-closed")
+    const proposed = store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))
+    trace("import-layer-open-start")
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        trace("import-layer-ready")
+        yield* seedQuotaSession(sessionID, directory)
+        const events = yield* EventV2.Service
+        const malformed = JSON.parse(bundle)
+        malformed.snapshot.aggregateID = "ses_foreign_quota"
+        expect((yield* events.importSnapshotBundle!(JSON.stringify(malformed)).pipe(Effect.exit))._tag).toBe("Failure")
+        trace("import-malformed-refused")
+        yield* events.importSnapshotBundle!(bundle)
+        trace("import-bundle-complete")
+        const db = (yield* Database.Service).db
+        expect(
+          (yield* db
+            .select({ value: count() })
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, sessionID))
+            .get()
+            .pipe(Effect.orDie))?.value,
+        ).toBe(12)
+        expect((yield* load(domain, docs[0]!.id, "import_already")).structured).toMatchObject({ state: "already_loaded" })
+        expect((yield* load(domain, docs[2]!.id, "import_full").pipe(Effect.result))._tag).toBe("Failure")
+        expect((yield* propose(knowledge, "import_full").pipe(Effect.result))._tag).toBe("Failure")
+        expect(store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))).toEqual(proposed)
+        trace("import-body-done")
+      }).pipe(Effect.provide(quotaLayer(path.join(directory, "import.sqlite"))), Effect.scoped),
+    )
+    trace("import-scope-closed")
+    trace("conflict-layer-open-start")
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        trace("conflict-layer-ready")
+        yield* seedQuotaSession(sessionID, directory)
+        const parsed = JSON.parse(bundle) as EventV2.SnapshotBundle
+        const row = parsed.rows.find((item) => item.tableName === "quota_event")!
+        const fact = JSON.parse(
+          Buffer.concat(parsed.chunks[row.rowHash]!.map((chunk) => Buffer.from(chunk, "base64"))).toString(),
+        ) as SessionToolQuota.SnapshotFact
+        const events = yield* EventV2.Service
+        if (fact.type === SessionToolQuota.types[0])
+          yield* events.publish(
+            SessionToolQuota.Loaded,
+            Schema.decodeUnknownSync(SessionToolQuota.Loaded.data)({ ...fact.data, ref: "doc:local-conflict" }),
+            { id: fact.id },
+          )
+        if (fact.type === SessionToolQuota.types[1])
+          yield* events.publish(
+            SessionToolQuota.Reserved,
+            Schema.decodeUnknownSync(SessionToolQuota.Reserved.data)({ ...fact.data, inputHash: "a".repeat(64) }),
+            { id: fact.id },
+          )
+        const db = (yield* Database.Service).db
+        yield* db
+          .update(SessionTable)
+          .set({ title: "untouched original" })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        const before = yield* db
+          .select()
           .from(EventTable)
           .where(eq(EventTable.aggregate_id, sessionID))
-          .get()
-          .pipe(Effect.orDie))?.value,
-      ).toBe(12)
-      expect((yield* load(domain, docs[0]!.id, "import_already")).structured).toMatchObject({ state: "already_loaded" })
-      expect((yield* load(domain, docs[2]!.id, "import_full").pipe(Effect.result))._tag).toBe("Failure")
-      expect((yield* propose(knowledge, "import_full").pipe(Effect.result))._tag).toBe("Failure")
-      expect(store.listByStatus("candidate").map((ref) => store.documentStore.get(ref.id))).toEqual(proposed)
-      trace("import-body-done")
-    }).pipe(Effect.provide(quotaLayer(path.join(directory, "import.sqlite"))), Effect.scoped),
-  )
-  trace("import-scope-closed")
-  trace("conflict-layer-open-start")
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      trace("conflict-layer-ready")
-      yield* seedQuotaSession(sessionID, directory)
-      const parsed = JSON.parse(bundle) as EventV2.SnapshotBundle
-      const row = parsed.rows.find((item) => item.tableName === "quota_event")!
-      const fact = JSON.parse(
-        Buffer.concat(parsed.chunks[row.rowHash]!.map((chunk) => Buffer.from(chunk, "base64"))).toString(),
-      ) as SessionToolQuota.SnapshotFact
-      const events = yield* EventV2.Service
-      if (fact.type === SessionToolQuota.types[0])
-        yield* events.publish(
-          SessionToolQuota.Loaded,
-          Schema.decodeUnknownSync(SessionToolQuota.Loaded.data)({ ...fact.data, ref: "doc:local-conflict" }),
-          { id: fact.id },
-        )
-      if (fact.type === SessionToolQuota.types[1])
-        yield* events.publish(
-          SessionToolQuota.Reserved,
-          Schema.decodeUnknownSync(SessionToolQuota.Reserved.data)({ ...fact.data, inputHash: "a".repeat(64) }),
-          { id: fact.id },
-        )
-      const db = (yield* Database.Service).db
-      yield* db
-        .update(SessionTable)
-        .set({ title: "untouched original" })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      const before = yield* db
-        .select()
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .all()
-        .pipe(Effect.orDie)
-      expect((yield* events.importSnapshotBundle!(bundle).pipe(Effect.exit))._tag).toBe("Failure")
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
-      ).toEqual(before)
-      expect(
-        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))?.title,
-      ).toBe("untouched original")
-      trace("conflict-body-done")
-    }).pipe(Effect.provide(quotaLayer(path.join(directory, "conflict.sqlite"))), Effect.scoped),
-  )
-  trace("conflict-scope-closed")
+          .all()
+          .pipe(Effect.orDie)
+        expect((yield* events.importSnapshotBundle!(bundle).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+        ).toEqual(before)
+        expect(
+          (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))?.title,
+        ).toBe("untouched original")
+        trace("conflict-body-done")
+      }).pipe(Effect.provide(quotaLayer(path.join(directory, "conflict.sqlite"))), Effect.scoped),
+    )
+    trace("conflict-scope-closed")
+  })
 })
