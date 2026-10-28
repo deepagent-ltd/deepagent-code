@@ -28,6 +28,12 @@ async function main(){
  const contents=window.webContents
  try {
   await contents.loadURL('http://127.0.0.1:'+server.address().port)
+  // Match the production dynamic-action visibility/focus precondition on Xvfb.
+  if(process.platform==='linux'){
+   window.show()
+   contents.focus()
+   if(!await contents.executeJavaScript('document.visibilityState==="visible" && document.hasFocus()'))throw new Error('MANAGED_BROWSER_INPUT_FIXTURE_NOT_READY')
+  }
   contents.debugger.attach('1.3')
   await contents.debugger.sendCommand('Page.enable')
   await contents.debugger.sendCommand('Accessibility.enable')
