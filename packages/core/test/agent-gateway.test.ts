@@ -36,6 +36,13 @@ const defaultProviderRunInput = {
 
 const tempRunsDir = () => tmpRootSharedAsync()
 
+const runtimeTrace = (test: string) => {
+  const started = performance.now()
+  return (phase: string) => console.error(JSON.stringify({
+    test, phase, elapsedMs: Math.round(performance.now() - started),
+  }))
+}
+
 const readOnlyRunDir = async (dir: string) => {
   const runs = await readdir(dir)
   expect(runs).toHaveLength(1)
@@ -185,6 +192,8 @@ describe("AgentGateway", () => {
   })
 
   test("V2 storage runtimes isolate the same Session ID across roots", async () => {
+    const trace = runtimeTrace("gateway-storage-isolation")
+    trace("start")
     const leftRoot = await tempRunsDir()
     const rightRoot = await tempRunsDir()
     try {
@@ -192,8 +201,12 @@ describe("AgentGateway", () => {
         Effect.runPromise(
           AgentGateway.Runtime.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode, baseDir }))),
         )
+      trace("left-layer-start")
       const left = await make(leftRoot, "high")
+      trace("left-layer-returned")
+      trace("right-layer-start")
       const right = await make(rightRoot, "max")
+      trace("right-layer-returned")
       const sessionID = "ses_same_identity"
 
       left.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high"))
@@ -215,7 +228,9 @@ describe("AgentGateway", () => {
       expect(right.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(rightRoot))).toBe(true)
       expect(existsSync(path.join(leftRoot, "state", "sessions.json"))).toBe(true)
       expect(existsSync(path.join(rightRoot, "state", "sessions.json"))).toBe(true)
+      trace("assertions-complete")
     } finally {
+      trace("cleanup-start")
       // Restore the durable-learning DEFAULT (ON). Leaving `durableLearning: false` here pollutes
       // the shared legacy config singleton and breaks W7's "default ON" assertion later in the file.
       AgentGateway.configure({ enabled: false, agentMode: "high", durableLearning: true })
@@ -223,23 +238,33 @@ describe("AgentGateway", () => {
         rm(leftRoot, { recursive: true, force: true }),
         rm(rightRoot, { recursive: true, force: true }),
       ])
+      trace("cleanup-complete")
     }
   })
 
   test("V2 storage seeding starts only when its Layer is built and stays root-owned", async () => {
+    const trace = runtimeTrace("gateway-seeding-lifecycle")
+    trace("start")
     const root = await tempRunsDir()
     try {
       const layer = AgentGateway.runtimeLayer({ enabled: true, agentMode: "high", baseDir: root })
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(false)
+      trace("described-layer-remains-unseeded")
+      trace("layer-start")
       const runtime = await Effect.runPromise(AgentGateway.Runtime.pipe(Effect.provide(layer)))
+      trace("layer-returned")
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(true)
       expect(runtime.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(root))).toBe(true)
     } finally {
+      trace("cleanup-start")
       await rm(root, { recursive: true, force: true })
+      trace("cleanup-complete")
     }
   })
 
   test("V2 runtime owns and finalizes one non-durable learning queue per Layer root", async () => {
+    const trace = runtimeTrace("gateway-learning-scope")
+    trace("start")
     const leftRoot = await tempRunsDir()
     const rightRoot = await tempRunsDir()
     const prototype = AgentGateway.DeepAgentBackgroundLearning.LearningQueue.prototype
@@ -251,6 +276,7 @@ describe("AgentGateway", () => {
     }
     try {
       for (const baseDir of [leftRoot, rightRoot]) {
+        trace(baseDir === leftRoot ? "left-layer-start" : "right-layer-start")
         await Effect.runPromise(
           AgentGateway.Runtime.pipe(
             Effect.asVoid,
@@ -259,15 +285,18 @@ describe("AgentGateway", () => {
             ),
           ),
         )
+        trace(baseDir === leftRoot ? "left-layer-returned" : "right-layer-returned")
       }
 
       expect(finalized.size).toBe(2)
     } finally {
+      trace("cleanup-start")
       prototype.drainNow = originalDrainNow
       await Promise.all([
         rm(leftRoot, { recursive: true, force: true }),
         rm(rightRoot, { recursive: true, force: true }),
       ])
+      trace("cleanup-complete")
     }
     // Builds two full runtime layers (migrations included); under a fully parallel suite run the
     // default 5s budget is consumed by contention rather than by the assertion.
