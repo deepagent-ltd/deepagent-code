@@ -75,7 +75,7 @@ impl Image {
             if image_changed(role,"git-links-match",image_checked(role,"git-links-read",image_links(&self.path.file))?!=links){return Err(io::ErrorKind::PermissionDenied.into());}
         }
         if image_changed(role,"section",self.section.0 == 0) ||
-            image_changed(role,"stamp-match",image_stamp(self,role,image_checked(role,"stamp-read",no_follow::stamp(&self.path.file))?) != self.stamp) {
+            image_changed(role,"stamp-match",image_stamp_changed(self,role,image_checked(role,"stamp-read",no_follow::stamp(&self.path.file))?)) {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         Ok(())
@@ -134,6 +134,24 @@ fn image_checked<A>(role: &'static str, stage: &'static str, value: io::Result<A
 fn image_changed(role: &'static str, stage: &'static str, changed: bool) -> bool {
     if changed { image_diagnostic(role,stage,"none",&io::ErrorKind::PermissionDenied.into()); }
     changed
+}
+fn image_stamp_changed(image: &Image, role: &'static str, actual: String) -> bool {
+    if image_stamp_valid(image,&actual) { return false; }
+    image_stamp(image,role,actual) != image.stamp
+}
+fn image_stamp_valid(image: &Image, actual: &str) -> bool {
+    if actual == image.stamp { return true; }
+    if !image.original_system || image.git_links.is_some() { return false; }
+    let Some(machine) = image.system_machine else { return false; };
+    let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+    let right = image.stamp.rsplitn(8, ':').collect::<Vec<_>>();
+    // Only an original system image can re-prove a metadata-only update with
+    // its held bytes and sealed policy. Captured descriptions stay immutable.
+    left.len() == 8 && right.len() == 8 && left[4] != right[4]
+        && (0..8).all(|index|index == 4 || left[index] == right[index])
+        && image_content_same(image,actual).unwrap_or(false)
+        && machine(&image.path.file).is_ok()
+        && no_follow::stamp(&image.path.file).is_ok_and(|stamp|stamp == actual)
 }
 fn image_stamp(image: &Image, role: &'static str, actual: String) -> String {
     if actual != image.stamp {
