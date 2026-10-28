@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { runValidationCommands, validationInvocation, type ShellProbe } from "../../src/deepagent/validation-exec"
 import { Shell } from "../../src/shell/shell"
+import fs from "node:fs/promises"
+import path from "node:path"
 
 // V3.2 P2-5 regression guard: a validation command that never exits must NOT hang the runner.
 // The timeout sentinel must kill the process and resolve to a failed ValidationResult within
@@ -150,7 +152,7 @@ describe("V3.2 validation-exec timeout", () => {
 
     // The injected Linux gate still runs on the actual test host. Supply its
     // real POSIX interpreter on Windows instead of inventing a /bin/sh there.
-    const shell = process.platform === "win32" ? Shell.gitbash() : undefined
+    const shell = process.platform === "win32" ? await actualWindowsBash() : undefined
     if (process.platform === "win32") expect(shell).toBeDefined()
     const wsl2 = await runValidationCommands(["exit 0"], process.cwd(), 5000, {
       platform: "linux",
@@ -161,3 +163,35 @@ describe("V3.2 validation-exec timeout", () => {
     expect(wsl2[0]).toMatchObject({ passed: true, kind: "command_exit", exit_code: 0 })
   })
 })
+
+async function actualWindowsBash() {
+  const selectedGit = Bun.which("git")
+  const git = selectedGit ? await fs.realpath(selectedGit) : undefined
+  // PATH can select Git's mingw64/bin entry instead of cmd/git.exe. Keep the
+  // production resolver intact and examine only existing host interpreters.
+  const candidates = [Shell.gitbash(), Bun.which("bash"), ...(git ? [
+    path.resolve(path.dirname(git), "../bin/bash.exe"),
+    path.resolve(path.dirname(git), "../../bin/bash.exe"),
+  ] : [])]
+  const system = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? process.env.WINDIR ?? "C:\\Windows"
+  for (const candidate of new Set(candidates)) {
+    if (!candidate) continue
+    const executable = await fs.realpath(candidate).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined
+      throw error
+    })
+    if (!executable || path.win32.basename(executable).toLowerCase() !== "bash.exe") continue
+    const relative = path.win32.relative(system, executable)
+    if ((!relative.startsWith("..") && !path.win32.isAbsolute(relative)) ||
+        executable.toLowerCase().split(/[\\/]/).includes("windowsapps")) continue
+    const identity = Bun.spawnSync([executable, "--version"], {
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000, env: { ...process.env, LC_ALL: "C" },
+    })
+    if (identity.exitCode === 0 && /^GNU bash, version /m.test(identity.stdout.toString())) {
+      console.info("VALIDATION_FIXTURE_GNU_BASH_IDENTITY", JSON.stringify({
+        executable, version: identity.stdout.toString().split(/\r?\n/)[0],
+      }))
+      return executable
+    }
+  }
+}
