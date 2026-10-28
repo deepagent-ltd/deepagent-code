@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { beforeAll, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library"
 import userEvent from "@testing-library/user-event"
 import { createStore } from "solid-js/store"
@@ -13,6 +13,12 @@ import { dict } from "@/i18n/en"
 import { publishImportFixturePacket } from "./fixture/import-control"
 import { importFixtureEnvironment } from "./fixture/import-environment"
 import { waitForImportFixtureReady } from "./fixture/import-readiness"
+import { buildImportFixture } from "./fixture/import-build"
+
+const prepared = { entry: "" }
+beforeAll(async () => {
+  if (process.platform === "win32") prepared.entry = await buildImportFixture("import-history-lifecycle-server.ts")
+}, 120_000)
 
 async function backupState(root: string, jobID: string) {
   const state = { selected: false, complete: false, directory: false,
@@ -82,7 +88,7 @@ async function processFor(root: string, count: number) {
   const startedAt = Date.now()
   const child = spawn(
     "bun",
-    ["--preload", path.resolve("test/components/fixture/import-startup.ts"), path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
+    ["--preload", path.resolve("test/components/fixture/import-startup.ts"), prepared.entry || path.join(packageDirectory, "test/fixture/import-history-lifecycle-server.ts"), root, String(count)],
     {
       cwd: packageDirectory,
       env: importFixtureEnvironment(root),
