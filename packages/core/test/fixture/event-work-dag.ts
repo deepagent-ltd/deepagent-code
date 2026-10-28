@@ -11,6 +11,7 @@ import { EventV2 } from "../../src/event"
 import { SessionV2 } from "../../src/session"
 import { SessionExecution } from "../../src/session/execution"
 import { SessionStore } from "../../src/session/store"
+import { SessionTable } from "../../src/session/sql"
 import { SessionProjector } from "../../src/session/projector"
 import { SessionContext } from "../../src/context-federation/session-context"
 import { PreparedProviderTurn } from "../../src/session/runner/prepared-provider-turn"
@@ -96,7 +97,7 @@ export const configure = (directory: string, plan: EventWorkDagSchema.Plan) => E
     toolPolicy: candidate.toolPolicy, childPolicy: { kind: "event_dag_v1" as const, maxConcurrent: 2, agents: [...new Set(plan.nodes.map((node) => node.agentID))], toolIDs: ["read"], budget: nodeBudget } }
   yield* db.run(sql`INSERT INTO project(id,worktree,sandboxes,time_created,time_updated) VALUES('global',${directory},'[]',1,1)`)
   yield* db.run(sql`INSERT INTO session(id,project_id,slug,directory,title,version,v2_authority,time_created,time_updated)
-    VALUES(${sourceID},'global',${sourceID},${directory},'Ordinary source','2',1,1,1)`)
+    VALUES(${sourceID},'global',${sourceID},${SessionTable.directory.mapToDriverValue(directory)},'Ordinary source','2',1,1,1)`)
   yield* db.run(sql`UPDATE context_location_identity SET location_key=${directory},canonical_root=${directory},observed_project_id='global'`)
   yield* db.run("UPDATE context_project_scope_identity SET observed_project_id='global'")
   const origin = { id: "ordinary-terminal", targetID: base.id, source: "ordinary_session_activity_terminal_v1" as const, sourceSessionID: sourceID, execution: { kind: "dag" as const, plan } }
