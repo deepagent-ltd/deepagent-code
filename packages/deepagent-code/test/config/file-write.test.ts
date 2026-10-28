@@ -49,6 +49,8 @@ async function child(root: string, role: string, expected?: string) {
   const process = Bun.spawn({
     cmd: [
       globalThis.process.execPath,
+      "--preload",
+      path.join(import.meta.dir, "fixture/file-write-preload.ts"),
       path.join(import.meta.dir, "fixture/file-write-process.ts"),
       root,
       role,
@@ -56,6 +58,17 @@ async function child(root: string, role: string, expected?: string) {
     ],
     cwd: path.resolve(import.meta.dir, "../.."),
     env: {
+      ...(globalThis.process.platform === "win32" ? {
+        SystemRoot: globalThis.process.env.SystemRoot ?? globalThis.process.env.SYSTEMROOT,
+        WINDIR: globalThis.process.env.WINDIR,
+        ComSpec: globalThis.process.env.ComSpec ?? globalThis.process.env.COMSPEC,
+        SystemDrive: globalThis.process.env.SystemDrive,
+        USERPROFILE: path.join(privateRoot, "home"),
+        APPDATA: path.join(privateRoot, "config"),
+        LOCALAPPDATA: path.join(privateRoot, "data"),
+        TEMP: path.join(privateRoot, "tmp"),
+        TMP: path.join(privateRoot, "tmp"),
+      } : {}),
       PATH: globalThis.process.env.PATH,
       HOME: path.join(privateRoot, "home"),
       DEEPAGENT_CODE_TEST_HOME: path.join(privateRoot, "home"),
@@ -78,6 +91,9 @@ async function child(root: string, role: string, expected?: string) {
       new Response(process.stdout).text(),
       new Response(process.stderr).text(),
     ])
+    console.info("CONFIG_FILE_WRITE_CHILD_PHASES", JSON.stringify({
+      role, code, phases: stderr.split(/\r?\n/).filter((line) => line.startsWith("CONFIG_FILE_WRITE_CHILD_PHASE ")),
+    }))
     return { code, stdout, stderr }
   } finally {
     clearTimeout(deadline)
