@@ -59,6 +59,12 @@ public static class DacImportFileSet {
   [StructLayout(LayoutKind.Sequential)] struct Basic { public long Created,Accessed,Written,Changed; public uint Attributes; }
   [StructLayout(LayoutKind.Sequential)] struct IoStatus { public IntPtr Status; public UIntPtr Information; }
   [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { public int Length; public IntPtr Descriptor; public int Inherit; }
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct FindData {
+    public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME Created,Accessed,Written;
+    public uint SizeHigh,SizeLow,Reserved0,Reserved1;
+    [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string Name;
+    [MarshalAs(UnmanagedType.ByValTStr,SizeConst=14)] public string Alternate;
+  }
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateFileW(string name,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr file,out Info info);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(IntPtr file,int kind,out Basic info,uint bytes);
@@ -68,6 +74,10 @@ public static class DacImportFileSet {
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool MoveFileExW(string source,string target,uint flags);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateDirectoryW(string name,ref SecurityAttributes security);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr file);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFileAttributesW(string name);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr FindFirstFileW(string pattern,out FindData data);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool FindNextFileW(IntPtr find,out FindData data);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool FindClose(IntPtr find);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint version,out IntPtr descriptor,out uint bytes);
   [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr file,int kind,uint fields,out IntPtr owner,IntPtr group,out IntPtr dacl,IntPtr sacl,out IntPtr descriptor);
@@ -106,7 +116,24 @@ public static class DacImportFileSet {
     string[] parts=value.Split('/');Need(parts.Length<=32&&parts.All(x=>x!=""&&x!="."&&x!=".."&&!x.Any(c=>c<32||c==127)));
     return value;
   }
-  static string Name(string relative) { return relative==""?Root:Path.Combine(Root,Relative(relative).Replace('/',Path.DirectorySeparatorChar)); }
+  static string Extended(string filename) { Need(filename.Length<32760);return filename.StartsWith(@"\\?\")?filename:@"\\?\"+filename; }
+  static string Name(string relative) { return relative==""?Root:Root+"\\"+Relative(relative).Replace('/','\\'); }
+  static uint Attributes(string filename,bool absent=false) {
+    uint result=GetFileAttributesW(Extended(filename));if(result!=0xffffffff) return result;
+    int error=Marshal.GetLastWin32Error();if(absent&&(error==2||error==3)) return result;throw new Win32Exception(error);
+  }
+  static string[] Children(string filename) {
+    FindData data;IntPtr find=FindFirstFileW(Extended(filename)+"\\*",out data);
+    if(find==new IntPtr(-1)) {int error=Marshal.GetLastWin32Error();if(error==2) return new string[0];throw new Win32Exception(error);}
+    var names=new List<string>();
+    try {
+      for(;;) {
+        if(data.Name!="."&&data.Name!="..") {Need(names.Count<10000);names.Add(data.Name);}
+        if(FindNextFileW(find,out data)) continue;int error=Marshal.GetLastWin32Error();if(error!=18)throw new Win32Exception(error);break;
+      }
+    } finally {Win(FindClose(find));}
+    names.Sort(StringComparer.Ordinal);return names.ToArray();
+  }
   static Info Read(IntPtr file,bool directory) {
     Info info;Win(GetFileInformationByHandle(file,out info));Need((info.Attributes&0x400)==0&&((info.Attributes&0x10)!=0)==directory);return info;
   }
@@ -115,10 +142,10 @@ public static class DacImportFileSet {
   static void Canonical(IntPtr file,string filename) {
     var buffer=new StringBuilder(32768);uint n=GetFinalPathNameByHandleW(file,buffer,(uint)buffer.Capacity,0);Win(n>0&&n<buffer.Capacity);
     string actual=buffer.ToString();if(actual.StartsWith(@"\\?\")) actual=actual.Substring(4);
-    Need(String.Equals(actual.TrimEnd('\\'),Path.GetFullPath(filename).TrimEnd('\\'),StringComparison.OrdinalIgnoreCase));
+    Need(String.Equals(actual.TrimEnd('\\'),filename.TrimEnd('\\'),StringComparison.OrdinalIgnoreCase));
   }
   static IntPtr Open(string filename,bool directory,bool write,bool movable,bool observe=false) {
-    IntPtr file=CreateFileW(filename,(write?0xC00E0000u:0x80020000u),1u|((directory||observe)?2u:0u)|(movable?4u:0u),IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+    IntPtr file=CreateFileW(Extended(filename),(write?0xC00E0000u:0x80020000u),1u|((directory||observe)?2u:0u)|(movable?4u:0u),IntPtr.Zero,3,0x02200000,IntPtr.Zero);
     Win(file!=new IntPtr(-1));try { Read(file,directory);Canonical(file,filename);return file; } catch {CloseHandle(file);throw;}
   }
   static DirectorySecurity Security(IntPtr file) {
@@ -126,9 +153,9 @@ public static class DacImportFileSet {
     if(error!=0) throw new Win32Exception((int)error);
     try {uint length=GetSecurityDescriptorLength(descriptor);Need(length>0&&length<=1048576);byte[] bytes=new byte[length];Marshal.Copy(descriptor,bytes,0,bytes.Length);var result=new DirectorySecurity();result.SetSecurityDescriptorBinaryForm(bytes);return result;} finally {LocalFree(descriptor);}
   }
-  static void Owner(IntPtr file,bool initial) {
+  static void Owner(IntPtr file,bool initial,bool machine=false) {
     string owner=Security(file).GetOwner(typeof(SecurityIdentifier)).Value;
-    Need(owner==Sid||(initial&&(owner=="S-1-5-18"||owner=="S-1-5-32-544")));
+    Need(owner==Sid||(initial&&(owner=="S-1-5-18"||owner=="S-1-5-32-544"))||(machine&&owner=="S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"));
   }
   static void Private(IntPtr file) {
     var acl=Security(file);Need(acl.GetOwner(typeof(SecurityIdentifier)).Value==Sid&&acl.AreAccessRulesProtected);
@@ -167,11 +194,12 @@ public static class DacImportFileSet {
     return file;
   }
   static void Init(string root,bool prepare) {
-    Need(Path.IsPathRooted(root)&&root.Length<32768&&root.IndexOf('\0')<0&&Path.GetPathRoot(root).Length==3);
-    Root=Path.GetFullPath(root).TrimEnd('\\');string prefix=Path.GetPathRoot(Root);
-    var parts=Root.Substring(prefix.Length).Split(new[]{'\\'},StringSplitOptions.RemoveEmptyEntries);
+    if(root.StartsWith(@"\\?\")) root=root.Substring(4);
+    Need(root.Length>3&&root.Length<32760&&root.IndexOf('\0')<0&&Char.IsLetter(root[0])&&root[1]==':'&&root[2]=='\\');
+    Root=root.TrimEnd('\\');string prefix=Root.Substring(0,3);
+    var parts=Root.Substring(3).Split(new[]{'\\'},StringSplitOptions.RemoveEmptyEntries);
     for(int i=-1;i<parts.Length;i++) {
-      if(i>=0) prefix=Path.Combine(prefix,parts[i]);IntPtr file=Open(prefix,true,i==parts.Length-1,false);Held.Add(file);Owner(file,true);
+      if(i>=0) prefix=prefix.TrimEnd('\\')+"\\"+parts[i];IntPtr file=Open(prefix,true,i==parts.Length-1,false);Held.Add(file);Owner(file,true,i<parts.Length-1);
       if(i==parts.Length-1) {if(prepare) Harden(file,true);else Private(file);Directories.Add("",file);uint serial,component,flags;var system=new StringBuilder(32);Win(GetVolumeInformationByHandleW(file,IntPtr.Zero,0,out serial,out component,out flags,system,32));Need(system.ToString()=="NTFS");}
     }
   }
@@ -179,7 +207,7 @@ public static class DacImportFileSet {
     root=Relative(root);relative=Relative(relative);IntPtr parent=Directory(root,true);string prefix=root;
     foreach(string part in relative.Split(new[]{'/'},StringSplitOptions.RemoveEmptyEntries)) {
       prefix=prefix==""?part:prefix+"/"+part;string filename=Name(prefix);IntPtr descriptor=Descriptor(true);
-      try {var security=new SecurityAttributes {Length=Marshal.SizeOf(typeof(SecurityAttributes)),Descriptor=descriptor};if(!CreateDirectoryW(filename,ref security)){int error=Marshal.GetLastWin32Error();if(error!=183) throw new Win32Exception(error);}} finally {LocalFree(descriptor);}
+      try {var security=new SecurityAttributes {Length=Marshal.SizeOf(typeof(SecurityAttributes)),Descriptor=descriptor};if(!CreateDirectoryW(Extended(filename),ref security)){int error=Marshal.GetLastWin32Error();if(error!=183) throw new Win32Exception(error);}} finally {LocalFree(descriptor);}
       IntPtr current=Directory(prefix,true);Need(Read(current,true).Volume==Read(parent,true).Volume);FlushDirectory(current);FlushDirectory(parent);parent=current;
     }
   }
@@ -192,11 +220,11 @@ public static class DacImportFileSet {
       Action<string,int> visit=null;
       visit=(name,depth)=>{
         if(checkpoints) Checkpoint();Relative(name);Need(Encoding.UTF8.GetByteCount(name)<=2048&&++entries<=10000&&depth<=32);
-        string filename=name==""?Name(relative):Path.Combine(Name(relative),name.Replace('/',Path.DirectorySeparatorChar));
-        FileAttributes attributes=File.GetAttributes(filename);Need((attributes&FileAttributes.ReparsePoint)==0);bool directory=(attributes&FileAttributes.Directory)!=0;
+        string filename=name==""?Name(relative):Name(relative)+"\\"+name.Replace('/','\\');
+        uint attributes=Attributes(filename);Need((attributes&0x400)==0);bool directory=(attributes&0x10)!=0;
         IntPtr file=Open(filename,directory,sync,true);
         try {if(sync) Harden(file,directory);else Private(file);Info before=Read(file,directory);Basic basic;Win(GetFileInformationByHandleEx(file,0,out basic,(uint)Marshal.SizeOf(typeof(Basic))));
-          if(directory) {result.directories.Add(name);foreach(string child in System.IO.Directory.EnumerateFileSystemEntries(filename).OrderBy(x=>Path.GetFileName(x),StringComparer.Ordinal)) visit(name==""?Path.GetFileName(child):name+"/"+Path.GetFileName(child),depth+1);if(sync) FlushDirectory(file);Info after=Read(file,true);Need(Same(before,after));IntPtr namedDirectory=Open(filename,true,false,true);try{Need(Same(before,Read(namedDirectory,true)));Private(namedDirectory);}finally{Win(CloseHandle(namedDirectory));}return;}
+          if(directory) {result.directories.Add(name);foreach(string child in Children(filename)) visit(name==""?child:name+"/"+child,depth+1);if(sync) FlushDirectory(file);Info after=Read(file,true);Need(Same(before,after));IntPtr namedDirectory=Open(filename,true,false,true);try{Need(Same(before,Read(namedDirectory,true)));Private(namedDirectory);}finally{Win(CloseHandle(namedDirectory));}return;}
           long length=((long)before.SizeHigh<<32)|before.SizeLow;Need(before.Links==1&&length<=16777216&&result.bytes+length<=268435456);
           byte[] bytes=new byte[(int)length];using(var safe=new SafeFileHandle(file,false))using(var stream=new FileStream(safe,FileAccess.Read)){int read=0;while(read<bytes.Length){int n=stream.Read(bytes,read,bytes.Length-read);Need(n>0);read+=n;}Need(stream.ReadByte()==-1);}
           if(sync) Win(FlushFileBuffers(file));Info final=Read(file,false);Basic afterBasic;Win(GetFileInformationByHandleEx(file,0,out afterBasic,(uint)Marshal.SizeOf(typeof(Basic))));
@@ -216,9 +244,9 @@ public static class DacImportFileSet {
     string sourceParent=source.Contains('/')?source.Substring(0,source.LastIndexOf('/')):"";
     string targetParent=target.Contains('/')?target.Substring(0,target.LastIndexOf('/')):"";
     IntPtr from=Directory(sourceParent,false),to=Directory(targetParent,false),payload=Open(Name(source),true,true,true);
-    try {Private(payload);Info before=Read(payload,true);Need(before.Volume==Read(from,true).Volume&&before.Volume==Read(to,true).Volume);Need(!File.Exists(Name(target))&&!System.IO.Directory.Exists(Name(target)));Need(Equal(Tree(source,false,false),expected));
-      Win(MoveFileExW(Name(source),Name(target),8));FlushDirectory(from);FlushDirectory(to);
-      Need(!File.Exists(Name(source))&&!System.IO.Directory.Exists(Name(source)));IntPtr final=Open(Name(target),true,false,true);try{Need(Same(before,Read(final,true)));Private(final);}finally{Win(CloseHandle(final));}
+    try {Private(payload);Info before=Read(payload,true);Need(before.Volume==Read(from,true).Volume&&before.Volume==Read(to,true).Volume);Need(Attributes(Name(target),true)==0xffffffff);Need(Equal(Tree(source,false,false),expected));
+      Win(MoveFileExW(Extended(Name(source)),Extended(Name(target)),8));FlushDirectory(from);FlushDirectory(to);
+      Need(Attributes(Name(source),true)==0xffffffff);IntPtr final=Open(Name(target),true,false,true);try{Need(Same(before,Read(final,true)));Private(final);}finally{Win(CloseHandle(final));}
       Snapshot observed=Tree(target,false,false);Need(Equal(observed,expected));return observed;
     } finally {Win(CloseHandle(payload));}
   }
