@@ -21,6 +21,8 @@ app.setPath("userData", ${JSON.stringify(path.join(root, "profile"))})
 app.on("window-all-closed",()=>{})
 const server=createServer((_req,res)=>res.end('<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
+const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
+const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -37,11 +39,16 @@ async function main(){
   contents.debugger.attach('1.3')
   await contents.debugger.sendCommand('Page.enable')
   await contents.debugger.sendCommand('Accessibility.enable')
-  const helper=createManagedBrowserActions({send:(method,params)=>contents.debugger.sendCommand(method,params),current:async()=>{},generation:()=>1,fail:(code)=>{throw new Error(code)},dispatched:()=>{result.dispatch++}})
+  const helper=createManagedBrowserActions({send:async(method,params)=>{
+   const response=await contents.debugger.sendCommand(method,params)
+   if(process.platform==='linux'&&['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(contents,'entry','original',method,params)
+   return response
+  },current:async()=>{},generation:()=>1,fail:(code)=>{throw new Error(code)},dispatched:()=>{result.dispatch++}})
   const snapshot=()=>helper.snapshot({type:'snapshot',tabID:'test',generation:1})
   const target=(page,name)=>({tabID:'test',generation:1,frameID:page.frameID,observationRevision:page.observationRevision,ref:page.refs.find(ref=>ref.name===name).ref})
   const page=await snapshot()
   result.passwordVisible=JSON.stringify(page).includes('NEVER_REVEAL_PASSWORD')
+  if(process.platform==='linux')await inputTrace(contents,'entry','original','fill-before')
   await helper.execute({type:'fill',...target(page,'Entry'),text:'中文一次'})
   result.filled=await contents.executeJavaScript('document.getElementById("entry").value')
   const fresh=await snapshot()
@@ -62,6 +69,52 @@ async function main(){
   try{await helper.execute({type:'click',...target(hovered,'Go')})}catch(e){result.errors.push(e.message)}
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
+  if(process.platform==='linux'){
+   // Diagnostic input stays in a separate owned page after the original business flow.
+   const diagnostic=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
+   const probe=diagnostic.webContents
+   try{
+    probe.debugger.attach('1.3')
+    await probe.debugger.sendCommand('Page.enable')
+    for(const variant of [
+     {name:'current-keyDown',type:'keyDown',code:false,control:false},
+     {name:'rawKeyDown',type:'rawKeyDown',code:false,control:false},
+     {name:'keyDown-KeyA',type:'keyDown',code:true,control:false},
+     {name:'rawKeyDown-KeyA',type:'rawKeyDown',code:true,control:false},
+     {name:'control-keyDown-KeyA',type:'keyDown',code:true,control:true},
+     {name:'control-rawKeyDown-KeyA',type:'rawKeyDown',code:true,control:true},
+    ]){
+     try{
+      await probe.loadURL('data:text/html,<input id="probe" value="before">')
+      diagnostic.show()
+      probe.focus()
+      const document=await probe.debugger.sendCommand('DOM.getDocument')
+      const entry=await probe.debugger.sendCommand('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#probe'})
+      await probe.debugger.sendCommand('DOM.focus',{nodeId:entry.nodeId})
+      await inputTrace(probe,'probe',variant.name,'ready')
+      const send=async(params)=>{
+       await probe.debugger.sendCommand('Input.dispatchKeyEvent',params)
+       await inputTrace(probe,'probe',variant.name,'Input.dispatchKeyEvent',params)
+      }
+      if(variant.control)await send({type:variant.type,key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:2})
+      const select={key:'a',windowsVirtualKeyCode:65,modifiers:2,...(variant.code?{code:'KeyA'}:{})}
+      await send({type:variant.type,...select,commands:['selectAll']})
+      await send({type:'keyUp',...select})
+      if(variant.control)await send({type:'keyUp',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:0})
+      const erase={key:'Backspace',windowsVirtualKeyCode:8,modifiers:0,...(variant.code?{code:'Backspace'}:{})}
+      await send({type:variant.type,...erase})
+      await send({type:'keyUp',...erase})
+      await probe.debugger.sendCommand('Input.insertText',{text:'中文一次'})
+      await inputTrace(probe,'probe',variant.name,'Input.insertText')
+     }catch(error){
+      // A diagnostic failure cannot replace the original case's business assertions.
+      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',name:error.name}))
+     }
+    }
+   }catch(error){
+    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage:'diagnostic-error',name:error.name}))
+   }finally{diagnostic.destroy()}
+  }
   await writeFile(${JSON.stringify(path.join(root, "result.json"))},JSON.stringify(result))
  }finally{window.destroy();server.closeAllConnections();server.close()}
 }
@@ -96,6 +149,8 @@ main().then(()=>app.exit(0)).catch(error=>{console.error(error);app.exit(1)})
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + stderr)
   console.log("MANAGED_BROWSER_INPUT_EVIDENCE", root)
+  if (process.platform === "linux")
+    stdout.split("\n").filter((line) => line.startsWith("LINUX_BROWSER_INPUT_TRACE ")).forEach((line) => console.log(line))
   expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.passwordVisible).toBe(false)
