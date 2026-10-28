@@ -19,10 +19,10 @@ export const populateSessionTables = (file: string, plan: PopulatePlan) => {
       "INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES ('proj_perf', '/tmp/perf-fixture-project', '[]', 1, 1)",
     )
     sqlite.exec("BEGIN")
-    const insertSession = sqlite.prepare(
+    using insertSession = sqlite.prepare(
       "INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    const insertMessage = sqlite.prepare(
+    using insertMessage = sqlite.prepare(
       "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     for (let s = 0; s < plan.sessions; s++) {
