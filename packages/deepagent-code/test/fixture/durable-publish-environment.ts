@@ -6,15 +6,11 @@ import { DurablePublish } from "@deepagent-code/core/database/durable-publish"
 
 export * as DurablePublishEnvironment from "./durable-publish-environment"
 
-/** The candidate changes exactly two expressions; reversing them and logging restores the bridge. */
-export function instrument(source: string, candidate = false) {
+/** Removing the phase-only logging restores the exact production bridge bytes. */
+export function instrument(source: string) {
   assert(!source.includes("DAC_TEST_PS_TRACE"))
-  const original = "New-Object System.Text.UTF8Encoding($false)"
-  const constructor = "[System.Text.UTF8Encoding]::new($false)"
-  assert.equal(source.split(original).length, 3, "The original bridge must contain exactly two encoding expressions")
-  assert(!source.includes(constructor))
-  const encoding = candidate ? constructor : original
-  const prepared = candidate ? source.replaceAll(original, constructor) : source
+  const encoding = "[System.Text.UTF8Encoding]::new($false)"
+  assert.equal(source.split(encoding).length, 3, "The production bridge must contain exactly two encoding expressions")
   const inserted: string[] = []
   const log = (phase: string) => {
     const text =
@@ -32,7 +28,7 @@ export function instrument(source: string, candidate = false) {
     "          const lines = phaseOutput.pending.split(/\\r?\\n/)",
     '          phaseOutput.pending = lines.pop() ?? ""',
     "          for (const line of lines) {",
-    "            const match = /^DAC_DURABLE_PUBLISH_PHASE:(process-entry|encoding-start|input-encoding|output-encoding|language-checked|input-wait|input-read|compile-start|compile-done|publish-start|publish-done):(\\d{1,15})$/.exec(line)",
+    "            const match = /^DAC_DURABLE_PUBLISH_PHASE:(process-entry|encoding-start|input-encoding|output-encoding|language-checked|module-load-start|module-load-done|input-wait|input-read|json-start|json-done|compile-start|compile-done|publish-start|publish-done):(\\d{1,15})$/.exec(line)",
     "            if (!match) continue",
     '            process.stderr.write("DURABLE_PUBLISH_PS_PHASE " + JSON.stringify({ phase: match[1], atMs: Number(match[2]), receivedMs: Math.round(performance.now() - phaseOutput.started) }) + "\\n")',
     "          }",
@@ -58,9 +54,20 @@ export function instrument(source: string, candidate = false) {
       after: log("language-checked"),
     },
     {
-      anchor: "  $inputValue=[Console]::In.ReadToEnd() | ConvertFrom-Json",
+      anchor:
+        "  Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop",
+      before: log("module-load-start"),
+      after: log("module-load-done"),
+    },
+    {
+      anchor: "  $inputText=[Console]::In.ReadToEnd()",
       before: log("input-wait"),
       after: log("input-read"),
+    },
+    {
+      anchor: "  $inputValue=ConvertFrom-Json -InputObject $inputText",
+      before: log("json-start"),
+      after: log("json-done"),
     },
     { anchor: "  Add-Type -TypeDefinition @'", before: log("compile-start"), after: "" },
     { anchor: "\n'@\n", before: "", after: log("compile-done") },
@@ -75,14 +82,9 @@ export function instrument(source: string, candidate = false) {
   const contents = points.reduce((value, point) => {
     assert.equal(value.split(point.anchor).length, 2, "Durable publish phase anchor must occur exactly once")
     return value.replace(point.anchor, point.before + point.anchor + point.after)
-  }, prepared)
+  }, source)
   const stripped = inserted.reduce((value, text) => value.replace(text, ""), contents)
-  if (candidate) assert.equal(stripped.split(constructor).length, 3)
-  assert.equal(
-    candidate ? stripped.replaceAll(constructor, original) : stripped,
-    source,
-    "Phase logging must preserve the original bridge bytes",
-  )
+  assert.equal(stripped, source, "Phase logging must preserve the production bridge bytes")
   return contents
 }
 

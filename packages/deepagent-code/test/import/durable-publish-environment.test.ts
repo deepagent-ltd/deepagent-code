@@ -23,8 +23,12 @@ const Phase = Schema.Struct({
     "input-encoding",
     "output-encoding",
     "language-checked",
+    "module-load-start",
+    "module-load-done",
     "input-wait",
     "input-read",
+    "json-start",
+    "json-done",
     "compile-start",
     "compile-done",
     "publish-start",
@@ -34,7 +38,7 @@ const Phase = Schema.Struct({
   receivedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 
-test("actual durable publication compares original and constructor-only scripts in the same owned Windows environment", async () => {
+test("actual durable publication succeeds in the owned narrow Windows environment", async () => {
   const parent = process.platform === "win32" ? path.resolve(import.meta.dir, "../../.artifacts/unit") : os.tmpdir()
   await fs.mkdir(parent, { recursive: true })
   const root = await fs.realpath(await fs.mkdtemp(path.join(parent, "durable-env-")))
@@ -59,72 +63,62 @@ test("actual durable publication compares original and constructor-only scripts 
   assert.equal(path.win32.parse(root).root.toUpperCase(), "D:\\")
   const core = await fs.realpath(path.resolve(import.meta.dir, "../../../core/src/database/durable-publish.ts"))
   const source = await fs.readFile(core, "utf8")
-  const entries = []
-  for (const mode of ["original", "candidate"] as const) {
-    const instrumented = DurablePublishEnvironment.instrument(source, mode === "candidate")
-    const loaded = { count: 0 }
-    const filename = "durable-publish-" + mode + ".js"
-    const build = await Bun.build({
-      entrypoints: [path.resolve(import.meta.dir, "../fixture/durable-publish-environment.ts")],
-      outdir: root,
-      naming: filename,
-      target: "bun",
-      format: "esm",
-      plugins: [
-        {
-          name: "test-only-durable-publish-encoding-comparison",
-          setup(builder) {
-            builder.onLoad({ filter: /[/\\]database[/\\]durable-publish\.ts$/ }, async (input) => {
-              if ((await fs.realpath(input.path)) !== core) return
-              loaded.count++
-              return { contents: instrumented, loader: "ts" }
-            })
-          },
+  const instrumented = DurablePublishEnvironment.instrument(source)
+  const loaded = { count: 0 }
+  const filename = "durable-publish.js"
+  const build = await Bun.build({
+    entrypoints: [path.resolve(import.meta.dir, "../fixture/durable-publish-environment.ts")],
+    outdir: root,
+    naming: filename,
+    target: "bun",
+    format: "esm",
+    plugins: [
+      {
+        name: "test-only-durable-publish-phases",
+        setup(builder) {
+          builder.onLoad({ filter: /[/\\]database[/\\]durable-publish\.ts$/ }, async (input) => {
+            if ((await fs.realpath(input.path)) !== core) return
+            loaded.count++
+            return { contents: instrumented, loader: "ts" }
+          })
         },
-      ],
-    })
-    expect(build.success).toBe(true)
-    expect(loaded.count).toBe(1)
-    const entry = path.join(root, filename)
-    expect(await fs.exists(entry)).toBe(true)
-    entries.push({ mode, entry })
-  }
-  const results = []
-  // Keep this order explicit. A failed original leg still yields the candidate facts;
-  // an unconfirmed child-tree retirement aborts before starting another leg.
-  for (const value of entries) {
-    const directory = path.join(root, value.mode)
-    await Promise.all(
-      ["home", "config", "data", "cache", "state"].map((name) =>
-        fs.mkdir(path.join(directory, name), { recursive: true, mode: 0o700 }),
-      ),
-    )
-    const result = await observe(directory, importFixtureEnvironment(directory), value.entry)
-    results.push({ mode: value.mode, ...result })
-    console.info("DURABLE_PUBLISH_ENV_RESULT", JSON.stringify({ mode: value.mode, ...result }))
-  }
-  expect(results.map((result) => result.mode)).toEqual(["original", "candidate"])
-  // Assert only after both actual legs have published their independent facts.
-  for (const result of results) {
-    expect(result.phase).toBe("completed")
-    expect(result.code).toBe(0)
-    expect(result.receipt).toMatchObject({ bridgeReceipt: true, sourceGone: true, targetEqual: true })
-    expect(result.sourceGone).toBe(true)
-    expect(result.targetEqual).toBe(true)
-    expect(result.phases.map((value) => value.phase)).toEqual([
-      "process-entry",
-      "encoding-start",
-      "input-encoding",
-      "output-encoding",
-      "language-checked",
-      "input-wait",
-      "input-read",
-      "compile-start",
-      "compile-done",
-      "publish-start",
-      "publish-done",
-    ])
-  }
+      },
+    ],
+  })
+  expect(build.success).toBe(true)
+  expect(loaded.count).toBe(1)
+  const entry = path.join(root, filename)
+  expect(await fs.exists(entry)).toBe(true)
+  const directory = path.join(root, "production")
+  await Promise.all(
+    ["home", "config", "data", "cache", "state"].map((name) =>
+      fs.mkdir(path.join(directory, name), { recursive: true, mode: 0o700 }),
+    ),
+  )
+  const result = await observe(directory, importFixtureEnvironment(directory), entry)
+  console.info("DURABLE_PUBLISH_ENV_RESULT", JSON.stringify({ mode: "production", ...result }))
+  expect(result.phase).toBe("completed")
+  expect(result.code).toBe(0)
+  expect(result.receipt).toMatchObject({ bridgeReceipt: true, sourceGone: true, targetEqual: true })
+  expect(result.sourceGone).toBe(true)
+  expect(result.targetEqual).toBe(true)
+  expect(result.phases.map((value) => value.phase)).toEqual([
+    "process-entry",
+    "encoding-start",
+    "input-encoding",
+    "output-encoding",
+    "language-checked",
+    "module-load-start",
+    "module-load-done",
+    "input-wait",
+    "input-read",
+    "json-start",
+    "json-done",
+    "compile-start",
+    "compile-done",
+    "publish-start",
+    "publish-done",
+  ])
 }, 150_000)
 
 async function observe(root: string, env: Record<string, string | undefined>, entry: string) {
