@@ -130,20 +130,34 @@ impl WorkFactory {
         result.current(image,proof)?; Ok(result)
     }
     pub fn current(&self, image: &FirstLoad, proof: &Evidence) -> io::Result<()> {
-        image.current()?; proof.current()?; self.windows_root.current()?; loader::require_machine(&self.windows_root.file)?;
-        self.data_root.current()?;loader::require_trusted(&self.data_root.file)?;
-        if super::work_workspace::fixed_data_root()?!=self.data_path{return Err(io::ErrorKind::PermissionDenied.into());}
+        phase("current-image",image.current())?; phase("current-proof",proof.current())?;
+        phase("current-windows-root",self.windows_root.current())?;
+        phase("current-windows-machine",loader::require_machine(&self.windows_root.file))?;
+        phase("current-data-root",self.data_root.current())?;
+        phase("current-data-trust",loader::require_trusted(&self.data_root.file))?;
+        if phase("current-data-path-read",super::work_workspace::fixed_data_root())?!=self.data_path{
+            return phase("current-data-path-match",Err(io::ErrorKind::PermissionDenied.into()));
+        }
         for (name, value, held) in &self.profiles {
-            if std::env::var(name).ok().as_ref() != Some(value) { return Err(io::ErrorKind::PermissionDenied.into()); }
-            held.current()?; loader::require_trusted(&held.file)?;
+            if std::env::var(name).ok().as_ref() != Some(value) {
+                return phase("current-profile-env",Err(io::ErrorKind::PermissionDenied.into()));
+            }
+            phase("current-profile-lease",held.current())?;
+            phase("current-profile-trust",loader::require_trusted(&held.file))?;
         }
         for (file, stamp) in [&self.receipt,&self.inventory].iter().zip(&self.stamps) {
-            file.current()?; loader::require_trusted(&file.file)?;
-            if no_follow::stamp(&file.file)? != *stamp { return Err(io::ErrorKind::PermissionDenied.into()); }
+            phase("current-sidecar-lease",file.current())?;
+            phase("current-sidecar-trust",loader::require_trusted(&file.file))?;
+            if phase("current-sidecar-stamp-read",no_follow::stamp(&file.file))? != *stamp {
+                return phase("current-sidecar-stamp-match",Err(io::ErrorKind::PermissionDenied.into()));
+            }
         }
-        self.helper.current()?; self.factory.current()?;
-        for imported in &self.system_imports{imported.current()?;}
-        for file in [self.helper.file(),self.factory.supervisor().file(),self.factory.payload().file()] { loader::require_trusted(file)?; }
+        phase("current-helper",self.helper.current())?;
+        phase("current-command-factory",self.factory.current())?;
+        for imported in &self.system_imports{phase("current-system-import",imported.current())?;}
+        for file in [self.helper.file(),self.factory.supervisor().file(),self.factory.payload().file()] {
+            phase("current-work-image-trust",loader::require_trusted(file))?;
+        }
         Ok(())
     }
     pub fn describe(&self, image: &FirstLoad, proof: &Evidence) -> io::Result<&str> { self.current(image,proof)?; Ok(&self.description) }

@@ -132,12 +132,16 @@ unsafe extern "C" fn open(env: Env, info: *mut c_void) -> Value {
 unsafe extern "C" fn read(env: Env, info: *mut c_void) -> Value {
     let Ok(api) = Api::load() else { return ptr::null_mut(); };
     let result = (|| -> io::Result<Value> {
-        let args = arguments(&api,env,info,2)?;
-        let all = states().lock().map_err(|_| io::ErrorKind::Other)?;
-        let entry = all.get(&(env as usize)).and_then(|state| state.entries.get(&api.pointer(env,args[1]).ok()?)).ok_or(io::ErrorKind::PermissionDenied)?;
-        if entry.capture != api.pointer(env,args[0])? { return Err(io::ErrorKind::PermissionDenied.into()); }
-        let text = napi::with_preloaded_image(env,args[0],|image,proof| entry.lease.describe(image,proof).map(str::to_owned))?;
-        api.text(env,&text)
+        let args = read_checked("read-arguments",arguments(&api,env,info,2))?;
+        let all = read_checked("read-state",states().lock().map_err(|_| io::ErrorKind::Other.into()))?;
+        let entry = read_checked("read-entry",all.get(&(env as usize)).and_then(|state|
+            state.entries.get(&read_checked("read-lease-token",api.pointer(env,args[1])).ok()?)).ok_or_else(|| io::ErrorKind::PermissionDenied.into()))?;
+        if entry.capture != read_checked("read-capture-token",api.pointer(env,args[0]))? {
+            return read_checked("read-capture-match",Err(io::ErrorKind::PermissionDenied.into()));
+        }
+        let text = read_checked("read-preloaded-image",napi::with_preloaded_image(env,args[0],|image,proof|
+            read_checked("read-describe",entry.lease.describe(image,proof).map(str::to_owned))))?;
+        read_checked("read-text",api.text(env,&text))
     })(); result.unwrap_or_else(|error| { diagnostic("read",error); api.error(env,c"WINDOWS_WORK_FACTORY_UNAVAILABLE") })
 }
 unsafe extern "C" fn close(env: Env, info: *mut c_void) -> Value {
@@ -170,6 +174,9 @@ pub(super) fn with_original_factory<A>(env:Env,capture:Value,lease:Value,
 
 fn diagnostic(stage: &'static str, error: io::Error) {
     eprintln!("WINDOWS_WORK_FACTORY_FAILURE stage={stage} kind={:?} os={}", error.kind(),error.raw_os_error().unwrap_or(0));
+}
+fn read_checked<A>(stage: &'static str, value: io::Result<A>) -> io::Result<A> {
+    value.inspect_err(|error|eprintln!("WINDOWS_WORK_FACTORY_FAILURE phase={stage} kind={:?} os={}",error.kind(),error.raw_os_error().unwrap_or(0)))
 }
 fn can_close(env: Env, token: usize) -> io::Result<bool> {
     Ok(super::work_child_bridge::factory_can_close(env,token)? &&

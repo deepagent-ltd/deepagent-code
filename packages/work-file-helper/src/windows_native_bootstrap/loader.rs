@@ -34,8 +34,12 @@ pub struct WorkSystemImage { image: Image }
 impl WorkSystemImage {
     pub fn description(&self)->(&std::path::Path,&ImageDescription){(&self.image.observed,&self.image.description)}
     pub fn current(&self)->io::Result<()>{
-        self.image.path.current()?;require_machine(&self.image.path.file)?;
-        if module_path(self.image.module.0)?!=self.image.observed || no_follow::stamp(&self.image.path.file)?!=self.image.stamp{return Err(io::ErrorKind::PermissionDenied.into());}Ok(())
+        current_checked("system","work-import-lease",self.image.path.current())?;
+        current_checked("system","work-import-machine",require_machine(&self.image.path.file))?;
+        if current_changed("system","work-import-mapped-path",||Ok(module_path(self.image.module.0)?!=self.image.observed))? ||
+            current_changed("system","work-import-stamp",||Ok(current_stamp("system",no_follow::stamp(&self.image.path.file)?,&self.image.stamp)!=self.image.stamp))? {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }Ok(())
     }
 }
 pub struct FirstLoad { images: Vec<Image>, system: LockedPath, description: Description }
