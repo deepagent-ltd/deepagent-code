@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { createServer } from "node:http"
 import { createHash } from "node:crypto"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
-import { writeFile, mkdir, copyFile } from "node:fs/promises"
+import { writeFile, mkdir, copyFile, readFile } from "node:fs/promises"
 import path from "node:path"
 import { spawnLocalServer } from "../server"
 import { spawnUnsealedCanonicalSidecar } from "./unsealed-canonical-sidecar"
@@ -45,6 +45,7 @@ async function main() {
   const posted: string[] = []
   let outsideRequests = 0
   let providerFinished = 0
+  const terminalProviderStops = new Set<number>()
   let selectionMutationRejected = false
   let controlID = ""
   let browserMissing = false
@@ -54,6 +55,7 @@ async function main() {
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(chunks).toString()) as { messages: Array<{ role: string; content: unknown }>; tools?: Array<{ function: { name: string } }> }
     bodies.push(body)
+    const requestOrdinal = bodies.length
     await writeFile(path.join(root, `provider-${bodies.length}.json`), JSON.stringify(body, null, 2))
     browserMissing ||= !body.tools?.some((tool) => tool.function.name === "browser")
     // The ordinary runner requires its real plan tool before the first mutating browser call.
@@ -82,7 +84,10 @@ async function main() {
       { choices: [{ index: 0, delta }] },
       { choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } } ])
       response.write(`data: ${JSON.stringify({ id: `completion-${bodies.length}`, object: "chat.completion.chunk", model: "fixture", created: 0, ...chunk })}\n\n`)
-    response.end("data: [DONE]\n\n", () => { providerFinished++ })
+    response.end("data: [DONE]\n\n", () => {
+      providerFinished++
+      if (!tool) terminalProviderStops.add(requestOrdinal)
+    })
   })
   await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve))
   const providerAddress = provider.address()
@@ -185,6 +190,35 @@ async function main() {
       const activity = database.prepare("SELECT a.state, s.execution_claim_token IS NOT NULL AS claimActive FROM session_activity a JOIN session s ON s.id=a.session_id WHERE a.session_id=? ORDER BY a.ordinal DESC LIMIT 1").get(sessionID)
       const turns = database.prepare("SELECT request_ordinal, state, error_code FROM session_v2_provider_turn_receipt WHERE session_id=? ORDER BY request_ordinal DESC LIMIT 8").all(sessionID)
       throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests; providerFinished=${providerFinished}; activity=${JSON.stringify(activity)}; turns=${JSON.stringify(turns)}; background=${JSON.stringify(backgroundWork(database))}`)
+    } finally { database.close() }
+  }
+  const waitForBrowserRejection = async (sessionID: string, duration: number) => {
+    const { DatabaseSync } = await import("node:sqlite")
+    const database = new DatabaseSync(path.join(root, "authority.sqlite"), { readOnly: true })
+    const effects = () => database.prepare(`SELECT e.state FROM session_v2_tool_effect_admission a
+      JOIN session_v2_tool_effect e ON e.receipt_id=a.receipt_id AND e.tool_call_id=a.tool_call_id
+        AND e.session_id=a.session_id AND e.tool_name=a.tool_name
+      WHERE a.session_id=? AND a.tool_name='browser' AND a.tool_call_id='call_browser_1'`).all(sessionID)
+    try {
+      const deadline = Date.now() + duration
+      while (Date.now() < deadline) {
+        if (bodies.length > 3) throw new Error("Fixture Browser rejection made an unexpected provider request")
+        const observed = effects()
+        if (observed.length === 1 && observed[0]!.state === "settled" && bodies.length === 3 &&
+            providerFinished >= 3 && terminalProviderStops.has(3)) {
+          const body = JSON.parse(await readFile(path.join(root, "provider-3.json"), "utf8")) as {
+            messages: Array<{ role: string; content: unknown }>
+          }
+          const error = body.messages.findLast((message) => message.role === "tool")?.content
+          const expected = mode === "selection-drift" ? "rejected"
+            : ["retired", "control-tamper"].includes(mode) ? "BROWSER_AUTHORITY_REQUIRED" : "BROWSER_SCOPE_DENIED"
+          if (typeof error !== "string" || !error.includes(expected))
+            throw new Error("Fixture Browser rejection did not persist its expected provider error history")
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error(`Fixture Browser rejection did not settle after ${bodies.length}/3 provider requests; providerFinished=${providerFinished}; terminalStop3=${terminalProviderStops.has(3)}; effects=${JSON.stringify(effects())}`)
     } finally { database.close() }
   }
   try {
@@ -335,9 +369,13 @@ async function main() {
       }
     }
     if (["wrong-root", "wrong-session", "retired", "selection-drift", "control-tamper"].includes(mode)) {
-      await waitForSettled(invokeSession.data.id, 3, 3_000)
+      await waitForBrowserRejection(invokeSession.data.id, 3_000)
+      // This denial oracle owns a Browser receipt, not natural Session drain
+      // completion. Join the original stop before observing final side effects.
+      await server.listener.stop()
       await writeFile(path.join(root, "result.json"), JSON.stringify({ mode, session, invokeSession, admitted,
-        permissions, selectionMutationRejected, providerRequests: bodies.length, previewRequests }, null, 2))
+        permissions, selectionMutationRejected, providerRequests: bodies.length, previewRequests,
+        fixtureCompletion: "browser-rejection-receipt" }, null, 2))
       return
     }
     const { DatabaseSync } = await import("node:sqlite")
