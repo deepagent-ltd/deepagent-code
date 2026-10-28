@@ -29,11 +29,15 @@ on:
         description: Optional Bun case-name pattern within a manual core, cli or desktop file; main pushes run every case
         type: string
         default: ""
+      project_runtime:
+        description: Use the packageManager runtime for a focused manual Linux CLI test file
+        type: boolean
+        default: false
 
 concurrency:
   # Keep every run on dev so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}-${{ inputs.shard || 'all' }}-${{ inputs.test_file || 'all-files' }}-${{ inputs.test_name || 'all-cases' }}
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.suite || 'all' }}-${{ inputs.shard || 'all' }}-${{ inputs.test_file || 'all-files' }}-${{ inputs.test_name || 'all-cases' }}-${{ inputs.project_runtime && 'project-runtime' || 'test-runtime' }}
   cancel-in-progress: true
 
 permissions:
@@ -62,7 +66,16 @@ jobs:
         run: |
           bun -e 'const suite=process.env.DAC_UNIT_SUITE; const shard=process.env.DAC_UNIT_SHARD; const file=process.env.DAC_UNIT_TEST_FILE; if (shard !== "all" && (!/^[1-8]$/.test(shard ?? "") || Number(shard) > (suite === "common" ? 1 : suite === "core" ? 4 : suite === "cli" ? 8 : 0))) throw new Error("Select a specific suite and one of its valid shards, or choose all shards"); if (["desktop","app"].includes(suite ?? "") && !file) throw new Error("A desktop or app diagnostic requires a test file"); if (file && (!["core","cli","desktop","app"].includes(suite ?? "") || shard !== "all" || !/^(?:test|src)\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.test\.tsx?$/.test(file) || !file.startsWith(suite === "desktop" ? "src/" : suite === "app" ? "test/components/" : "test/") || file.split("/").includes(".."))) throw new Error("A file diagnostic requires core, cli, desktop or app, all shards, and a package-relative test file")'
           bun -e 'const name=process.env.DAC_UNIT_TEST_NAME; if (name && (!process.env.DAC_UNIT_TEST_FILE || process.env.DAC_UNIT_SHARD !== "all" || !["core","cli","desktop"].includes(process.env.DAC_UNIT_SUITE ?? "") || name.length > 256 || /[\x00-\x1f\x7f]/.test(name))) throw new Error("A Bun case diagnostic requires a file, all shards, and a bounded case pattern"); if (name) new RegExp(name)'
+          if [[ "$DAC_UNIT_PROJECT_RUNTIME" == 'true' ]]; then
+            test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+            test "$DAC_UNIT_PLATFORM" = 'linux'
+            test "$DAC_UNIT_SUITE" = 'cli'
+            test -n "$DAC_UNIT_TEST_FILE"
+            git ls-files --error-unmatch "packages/deepagent-code/$DAC_UNIT_TEST_FILE"
+          fi
         env:
+          DAC_UNIT_PLATFORM: ${{ inputs.platform || 'all' }}
+          DAC_UNIT_PROJECT_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.project_runtime && 'true' || 'false' }}
           DAC_UNIT_SUITE: ${{ inputs.suite || 'all' }}
           DAC_UNIT_SHARD: ${{ inputs.shard || 'all' }}
           DAC_UNIT_TEST_FILE: ${{ inputs.test_file || '' }}
@@ -254,7 +267,7 @@ jobs:
           echo "DAC_WORK_FILE_HELPER_BINARY=$dac_work_file_helper" >> "$GITHUB_ENV"
 
       - name: Prepare the fixed Linux CLI test runtime
-        if: runner.os == 'Linux' && matrix.suite == 'cli'
+        if: runner.os == 'Linux' && matrix.suite == 'cli' && !(github.event_name == 'workflow_dispatch' && inputs.project_runtime)
         timeout-minutes: 10
         # Bun #43856 crashes in NapiEnv teardown after passing --isolate files.
         # Keep installation and dependency builds on the project's Bun 1.4.2.
@@ -279,6 +292,15 @@ jobs:
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: |
+          if [[ "$DAC_PROJECT_RUNTIME" == 'true' ]]; then
+            test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+            test "$DAC_TEST_PLATFORM" = 'linux'
+            test "$RUNNER_OS" = 'Linux'
+            test "$DAC_TEST_SUITE" = 'cli'
+            test -n "$DAC_TEST_FILE"
+            git ls-files --error-unmatch "packages/deepagent-code/$DAC_TEST_FILE"
+            test "$(bun --version)" = '1.4.2'
+          fi
           if [[ ( "$DAC_TEST_SUITE" == 'desktop' || "$DAC_TEST_SUITE" == 'app' ) && -z "$DAC_TEST_FILE" ]]; then
             echo 'A desktop or app diagnostic requires a test file' >&2
             exit 1
@@ -302,7 +324,7 @@ jobs:
               bun turbo build --filter='@deepagent-code/app^...'
               dac_test_directory='packages/app'
             else
-              if [[ "$RUNNER_OS" != 'Linux' || "$DAC_TEST_SUITE" != 'cli' ]]; then
+              if [[ "$RUNNER_OS" != 'Linux' || "$DAC_TEST_SUITE" != 'cli' || "$DAC_PROJECT_RUNTIME" == 'true' ]]; then
                 bun turbo build --filter='deepagent-code^...'
               fi
               dac_test_directory='packages/deepagent-code'
@@ -337,6 +359,8 @@ jobs:
             "${dac_test_command[@]}"
           fi
         env:
+          DAC_TEST_PLATFORM: ${{ inputs.platform || 'all' }}
+          DAC_PROJECT_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.project_runtime && 'true' || 'false' }}
           DAC_TEST_SUITE: ${{ matrix.suite }}
           DAC_TEST_SHARD: ${{ matrix.shard }}
           DAC_TEST_SHARDS: ${{ matrix.suite == 'cli' && 8 || 4 }}
