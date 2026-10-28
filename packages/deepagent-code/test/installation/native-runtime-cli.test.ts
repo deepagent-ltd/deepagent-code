@@ -580,7 +580,8 @@ async function prepareFixture(registerServer: (server: ReturnType<typeof createS
         /^WINDOWS_WORK_(?:CHILD|FACTORY|HELPER)_FAILURE (?:stage|phase)=[a-z][a-z-]{0,47} kind=[A-Za-z]{1,40} os=-?\d{1,10}(?: exit_known=(?:true|false) exit_code=\d{1,10})?$/.test(line) ||
         /^dac-native-preload:(?:installation-open|installation-read|accept):[A-Za-z]{1,40}:(?:None|Some\(-?\d{1,10}\))$/.test(line) ||
         /^dac-native-installation-current:(?:original-current|preload-current|manifest-current|manifest-trusted|artifact-trusted|artifact-stamp|manifest-stamp|runtime-stamp):[A-Za-z]{1,40}:(?:None|Some\(-?\d{1,10}\))$/.test(line) ||
-        /^dac-native-first-load-current:(?:bootstrap|runtime|system|module):(?:system-lease|system-machine|image-lease|mapped-path|stamp|identity|image-machine|private-trust):(?:none|creation|write|change|attrs|size-high|size-low|links|identity):[A-Za-z]{1,40}:(?:None|Some\(-?\d{1,10}\))$/.test(line),
+        /^dac-native-first-load-current:(?:bootstrap|runtime|system|module):(?:system-lease|system-machine|image-lease|mapped-path|stamp|identity|image-machine|private-trust):(?:none|creation|write|change|attrs|size-high|size-low|links|identity):[A-Za-z]{1,40}:(?:None|Some\(-?\d{1,10}\))$/.test(line) ||
+        /^dac-native-first-load-change-only:[A-Za-z0-9._-]{1,128}:content_same=(?:true|false|unknown):machine_trusted=(?:true|false|unknown)$/.test(line),
       ).slice(-32)
       expect({ mode, exit, diagnostic: exit === (success ? 0 : 2) ? "expected" : { result, classifications } }).toEqual({
         mode,

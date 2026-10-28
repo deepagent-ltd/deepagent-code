@@ -1,7 +1,7 @@
 use crate::{no_follow::{self, LockedPath}, protocol::Identity};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{ffi::{c_void, OsString}, fs::File, io::{self, Read}, mem::size_of,
+use std::{ffi::{c_void, OsString}, fs::File, io::{self, Read, Seek, SeekFrom}, mem::size_of,
     os::windows::{ffi::OsStringExt, io::AsRawHandle}, path::PathBuf, ptr};
 use windows_sys::Win32::{Foundation::{CloseHandle, LocalFree, HANDLE, INVALID_HANDLE_VALUE},
     Security::{ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -207,7 +207,7 @@ impl FirstLoad {
             // Match the actual mapped image to that held namespace rather than
             // acquiring a second copy of its entire immutable directory chain.
             if current_changed(role, "mapped-path", || Ok(name != image.observed))?
-                || current_changed(role, "stamp", || Ok(current_stamp(role, no_follow::stamp(&image.path.file)?, &image.stamp) != image.stamp))?
+                || current_changed(role, "stamp", || Ok(current_stamp(role, current_system_stamp(image, no_follow::stamp(&image.path.file)?), &image.stamp) != image.stamp))?
                 || current_changed(role, "identity", || Ok(no_follow::identity(&image.path.file)? != image.description.identity))? {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
@@ -242,6 +242,48 @@ fn current_stamp(role: &'static str, actual: String, expected: &str) -> String {
         }
     }
     actual
+}
+fn current_system_stamp(image: &Image, actual: String) -> String {
+    if image.description.system && current_only_change(&actual, &image.stamp) {
+        let content = match current_content_same(image, &actual) { Ok(true) => "true", Ok(false) => "false", Err(_) => "unknown" };
+        // This is the original machine policy's current result, not an exact
+        // comparison of captured ACL bytes or a replacement acceptance rule.
+        let machine = match require_machine(&image.path.file) {
+            Ok(()) => "true",
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && error.raw_os_error().is_none() => "false",
+            Err(_) => "unknown",
+        };
+        let name = image.observed.file_name().and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && name.len() <= 128 && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
+            .unwrap_or("system-image");
+        eprintln!("dac-native-first-load-change-only:{name}:content_same={content}:machine_trusted={machine}");
+    }
+    actual
+}
+fn current_only_change(actual: &str, expected: &str) -> bool {
+    let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
+    let right = expected.rsplitn(8, ':').collect::<Vec<_>>();
+    left.len() == 8 && right.len() == 8 && left[4] != right[4]
+        && (0..8).all(|index| index == 4 || left[index] == right[index])
+}
+fn current_content_same(image: &Image, observed_stamp: &str) -> io::Result<bool> {
+    if image.description.bytes == 0 || image.description.bytes > 268_435_456 || no_follow::stamp(&image.path.file)? != observed_stamp {
+        return Err(io::ErrorKind::WouldBlock.into());
+    }
+    let mut reader = image.path.file.try_clone()?;
+    let position = reader.stream_position()?;
+    let mut hash = Sha256::new();
+    // Duplicate handles share a cursor. Restore it even if seek/read fails;
+    // a failed probe stays unknown and never changes the original rejection.
+    let read = (|| {
+        reader.seek(SeekFrom::Start(0))?;
+        io::copy(&mut (&mut reader).take(image.description.bytes + 1), &mut hash)
+    })();
+    let restored = reader.seek(SeekFrom::Start(position));
+    let bytes = read?;
+    restored?;
+    if no_follow::stamp(&image.path.file)? != observed_stamp { return Err(io::ErrorKind::WouldBlock.into()); }
+    Ok(bytes == image.description.bytes && format!("{:x}", hash.finalize()) == image.description.sha256)
 }
 
 struct Snapshot(HANDLE);
