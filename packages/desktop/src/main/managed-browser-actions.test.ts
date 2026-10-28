@@ -9,6 +9,7 @@ import {
 
 test("actual Chromium references reject stale nodes and focus theft without exposing passwords", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-inputs-")))
+  const diagnosticAB = process.env.DAC_BROWSER_INPUT_FIXTURE_AB_DIAGNOSTIC === "1"
   await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
   await Bun.write(
     path.join(root, "main.ts"),
@@ -22,7 +23,7 @@ app.on("window-all-closed",()=>{})
 const server=createServer((_req,res)=>res.end('<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
 const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
-const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,state:await inputState(contents,id)}))
+const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -69,13 +70,22 @@ async function main(){
   try{await helper.execute({type:'click',...target(hovered,'Go')})}catch(e){result.errors.push(e.message)}
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
-  if(process.platform==='linux'){
+  if(process.platform==='linux'||${diagnosticAB}){
    // Diagnostic input stays in a separate owned page after the original business flow.
    const diagnostic=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
    const probe=diagnostic.webContents
+   const setup={stage:'created'}
+   const mark=(stage)=>{setup.stage=stage;console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage}))}
    try{
+    mark('owned-page-load-start')
+    await probe.loadURL('data:text/html,<input id="probe" value="before">')
+    mark('owned-page-loaded')
+    mark('debugger-attach-start')
     probe.debugger.attach('1.3')
+    mark('debugger-attached')
+    mark('page-enable-start')
     await probe.debugger.sendCommand('Page.enable')
+    mark('page-enabled')
     for(const variant of [
      {name:'current-keyDown',type:'keyDown',code:false,control:false},
      {name:'rawKeyDown',type:'rawKeyDown',code:false,control:false},
@@ -84,15 +94,20 @@ async function main(){
      {name:'control-keyDown-KeyA',type:'keyDown',code:true,control:true},
      {name:'control-rawKeyDown-KeyA',type:'rawKeyDown',code:true,control:true},
     ]){
+     const phase={stage:'owned-page-load'}
      try{
       await probe.loadURL('data:text/html,<input id="probe" value="before">')
-      diagnostic.show()
-      probe.focus()
+      if(process.platform==='linux'){diagnostic.show();probe.focus()}
+      phase.stage='DOM.getDocument'
       const document=await probe.debugger.sendCommand('DOM.getDocument')
+      phase.stage='DOM.querySelector'
       const entry=await probe.debugger.sendCommand('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#probe'})
+      phase.stage='DOM.focus'
       await probe.debugger.sendCommand('DOM.focus',{nodeId:entry.nodeId})
+      phase.stage='ready-state'
       await inputTrace(probe,'probe',variant.name,'ready')
       const send=async(params)=>{
+       phase.stage='Input.dispatchKeyEvent:'+params.type+':'+params.key
        await probe.debugger.sendCommand('Input.dispatchKeyEvent',params)
        await inputTrace(probe,'probe',variant.name,'Input.dispatchKeyEvent',params)
       }
@@ -104,15 +119,16 @@ async function main(){
       const erase={key:'Backspace',windowsVirtualKeyCode:8,modifiers:0,...(variant.code?{code:'Backspace'}:{})}
       await send({type:variant.type,...erase})
       await send({type:'keyUp',...erase})
+      phase.stage='Input.insertText'
       await probe.debugger.sendCommand('Input.insertText',{text:'中文一次'})
       await inputTrace(probe,'probe',variant.name,'Input.insertText')
      }catch(error){
       // A diagnostic failure cannot replace the original case's business assertions.
-      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',name:error.name}))
+      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',during:phase.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
      }
     }
    }catch(error){
-    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage:'diagnostic-error',name:error.name}))
+    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage:'diagnostic-error',during:setup.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
    }finally{diagnostic.destroy()}
   }
   await writeFile(${JSON.stringify(path.join(root, "result.json"))},JSON.stringify(result))
@@ -149,7 +165,7 @@ main().then(()=>app.exit(0)).catch(error=>{console.error(error);app.exit(1)})
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + stderr)
   console.log("MANAGED_BROWSER_INPUT_EVIDENCE", root)
-  if (process.platform === "linux")
+  if (process.platform === "linux" || diagnosticAB)
     stdout.split("\n").filter((line) => line.startsWith("LINUX_BROWSER_INPUT_TRACE ")).forEach((line) => console.log(line))
   expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
