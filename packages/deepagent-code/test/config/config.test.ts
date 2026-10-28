@@ -1305,6 +1305,40 @@ it.instance(
   },
 )
 
+it.instance(
+  "stops plugin watching while its deleted directory awaits rebuilding",
+  () =>
+    Effect.gen(function* () {
+      const pluginDir = path.join((yield* TestInstance).directory, ".deepagent-code", "plugin")
+      const config = yield* Config.Service
+      yield* config.get()
+      const removed = Deferred.makeUnsafe<void>()
+      let calls = 0
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          calls++
+          yield* Deferred.succeed(removed, undefined)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.promise(() => fs.rm(pluginDir, { recursive: true }))
+      yield* Deferred.await(removed).pipe(Effect.timeout("5 seconds"))
+      stop()
+      const stopped = calls
+      yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "rebuilt.ts"), "export default {}\n")
+      yield* Effect.sleep("200 millis")
+      expect(calls).toBe(stopped)
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "rebuilt.ts"), "export default { id: 'edited' }\n")
+      yield* Effect.sleep("200 millis")
+      expect(calls).toBe(stopped)
+    }),
+  {
+    init: (dir) =>
+      FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugin", "demo.ts"), "export default {}\n"),
+  },
+)
+
 it.instance("gets config directories", () =>
   Effect.gen(function* () {
     const dirs = yield* Config.use.directories()
