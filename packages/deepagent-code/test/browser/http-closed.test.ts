@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 
 test("actual bare Node HTTP refuses native creation without host or configured authentication", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-http-closed-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-http-closed-")))
   await fs.chmod(root, 0o700)
   // Node sidecar externals are shipped by Desktop, including its Node-ABI PTY selector.
   await fs.symlink(path.resolve(import.meta.dir, "../../../desktop/node_modules"), path.join(root, "node_modules"), "dir")
