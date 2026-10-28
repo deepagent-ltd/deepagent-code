@@ -282,7 +282,7 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   const child = spawn("bun", ["--preload", path.resolve("test/components/fixture/import-startup.ts"), path.join(hostPackage, "test/fixture/import-gui-job-server.ts"), root], {
     cwd: hostPackage,
     env: importFixtureEnvironment(root),
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [process.platform === "win32" ? "pipe" : "ignore", "pipe", "pipe"],
   })
   const observations: {
     phase: string
@@ -317,6 +317,7 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
   let output = ""
   child.stdout?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
   child.stderr?.on("data", (data: Buffer) => { output = (output + data.toString()).slice(-65536) })
+  child.stdin?.on("error", () => {})
   child.once("error", (error) => { progress.spawnError = error.message })
   const exited = new Promise<number | null>((resolve) =>
     child.once("close", (code) => {
@@ -481,7 +482,10 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     cleanup()
     surface.happyDOM.setURL(origin)
     clearTimeout(deadline)
-    if (child.exitCode === null) child.kill("SIGTERM")
+    if (child.exitCode === null) {
+      if (process.platform === "win32") child.stdin?.end("STOP\n")
+      else child.kill("SIGTERM")
+    }
     const forced = setTimeout(() => child.kill("SIGKILL"), 2000)
     const code = await exited
     clearTimeout(forced)

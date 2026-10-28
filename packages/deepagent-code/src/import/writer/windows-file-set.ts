@@ -96,7 +96,9 @@ public static class DacImportFileSet {
   public sealed class Identity { public string device,inode; }
   public sealed class Entry { public string relative,sha256; public int bytes; }
   public sealed class Snapshot { public Identity identity; public List<Entry> files=new List<Entry>(); public List<string> directories=new List<string>(); public int bytes; }
+  sealed class BudgetError : Exception {}
   static void Need(bool value) { if(!value) throw new InvalidDataException(); }
+  static void Budget(bool value) { if(!value) throw new BudgetError(); }
   static void Win(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   static void Emit(string phase,object value=null,int index=0,string code=null) {
     Console.Out.WriteLine(Json.Serialize(new {protocol=1,nonce=Nonce,seq=Sequence,phase=phase,value=value,index=index,code=code}));
@@ -128,7 +130,7 @@ public static class DacImportFileSet {
     var names=new List<string>();
     try {
       for(;;) {
-        if(data.Name!="."&&data.Name!="..") {Need(names.Count<10000);names.Add(data.Name);}
+        if(data.Name!="."&&data.Name!="..") {Budget(names.Count<10000);names.Add(data.Name);}
         if(FindNextFileW(find,out data)) continue;int error=Marshal.GetLastWin32Error();if(error!=18)throw new Win32Exception(error);break;
       }
     } finally {Win(FindClose(find));}
@@ -219,13 +221,13 @@ public static class DacImportFileSet {
     try {if(sync) Harden(root,true);else Private(root);Info identity=Read(root,true);result.identity=Id(identity);
       Action<string,int> visit=null;
       visit=(name,depth)=>{
-        if(checkpoints) Checkpoint();Relative(name);Need(Encoding.UTF8.GetByteCount(name)<=2048&&++entries<=10000&&depth<=32);
+        if(checkpoints) Checkpoint();Budget(++entries<=10000&&depth<=32);Relative(name);Need(Encoding.UTF8.GetByteCount(name)<=2048);
         string filename=name==""?Name(relative):Name(relative)+"\\"+name.Replace('/','\\');
         uint attributes=Attributes(filename);Need((attributes&0x400)==0);bool directory=(attributes&0x10)!=0;
         IntPtr file=Open(filename,directory,sync,true);
         try {if(sync) Harden(file,directory);else Private(file);Info before=Read(file,directory);Basic basic;Win(GetFileInformationByHandleEx(file,0,out basic,(uint)Marshal.SizeOf(typeof(Basic))));
           if(directory) {result.directories.Add(name);foreach(string child in Children(filename)) visit(name==""?child:name+"/"+child,depth+1);if(sync) FlushDirectory(file);Info after=Read(file,true);Need(Same(before,after));IntPtr namedDirectory=Open(filename,true,false,true);try{Need(Same(before,Read(namedDirectory,true)));Private(namedDirectory);}finally{Win(CloseHandle(namedDirectory));}return;}
-          long length=((long)before.SizeHigh<<32)|before.SizeLow;Need(before.Links==1&&length<=16777216&&result.bytes+length<=268435456);
+          long length=((long)before.SizeHigh<<32)|before.SizeLow;Budget(before.Links==1&&length<=16777216&&result.bytes+length<=268435456);
           byte[] bytes=new byte[(int)length];using(var safe=new SafeFileHandle(file,false))using(var stream=new FileStream(safe,FileAccess.Read)){int read=0;while(read<bytes.Length){int n=stream.Read(bytes,read,bytes.Length-read);Need(n>0);read+=n;}Need(stream.ReadByte()==-1);}
           if(sync) Win(FlushFileBuffers(file));Info final=Read(file,false);Basic afterBasic;Win(GetFileInformationByHandleEx(file,0,out afterBasic,(uint)Marshal.SizeOf(typeof(Basic))));
           Need(Same(before,final)&&before.SizeHigh==final.SizeHigh&&before.SizeLow==final.SizeLow&&final.Links==1&&basic.Written==afterBasic.Written&&basic.Changed==afterBasic.Changed);
@@ -268,7 +270,7 @@ public static class DacImportFileSet {
         Emit("result",result);
       }
     } catch(Exception error) {
-      var native=error as Win32Exception;Emit("error",null,0,(Step??"setup")+":"+(native==null?"invalid":native.NativeErrorCode.ToString()));throw;
+      var native=error as Win32Exception;Emit("error",null,0,(Step??"setup")+":"+(error is BudgetError?"budget":native==null?"invalid":native.NativeErrorCode.ToString()));throw;
     } finally {Close();}
   }
 }
@@ -385,8 +387,11 @@ export async function open(root: string, prepare = false) {
         if (next.done || state.invalid) throw new Error("IMPORT_FILE_WINDOWS_RECEIPT_UNKNOWN")
         const frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame), { onExcessProperty: "error" })(next.value)
         if (frame.nonce !== nonce || frame.seq !== seq) throw new Error("IMPORT_FILE_WINDOWS_RECEIPT_UNKNOWN")
-        if (frame.phase === "error")
+        if (frame.phase === "error") {
+          if (frame.code?.endsWith(":budget"))
+            throw new Error("IMPORT_FILE_BUDGET_EXCEEDED: complete private file-set budget")
           throw new Error("IMPORT_FILE_WINDOWS_FAILED: " + (frame.code?.slice(0, 128) ?? "unknown"))
+        }
         if (frame.phase === "result") return frame.value
         if (frame.index !== index || index > 10_000) throw new Error("IMPORT_FILE_WINDOWS_RECEIPT_UNKNOWN")
         await Promise.race([checkpoint(), timeout.promise])

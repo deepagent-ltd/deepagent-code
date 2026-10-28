@@ -86,7 +86,7 @@ async function processFor(root: string, count: number) {
     {
       cwd: packageDirectory,
       env: importFixtureEnvironment(root),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [process.platform === "win32" ? "pipe" : "ignore", "pipe", "pipe"],
     },
   )
   const observations: {
@@ -136,6 +136,7 @@ async function processFor(root: string, count: number) {
       console.error(line)
     }
   })
+  child.stdin?.on("error", () => {})
   child.once("error", (error) => {
     spawnError = error.message
   })
@@ -244,7 +245,10 @@ async function processFor(root: string, count: number) {
     posts: () => calls.filter((call) => call.method === "POST" && call.path === "/global/import/jobs").length,
     async close() {
       clearTimeout(deadline)
-      if (child.exitCode === null) child.kill("SIGTERM")
+      if (child.exitCode === null) {
+        if (process.platform === "win32") child.stdin?.end("STOP\n")
+        else child.kill("SIGTERM")
+      }
       const force = setTimeout(() => child.kill("SIGKILL"), 2000)
       const code = await exited
       clearTimeout(force)

@@ -270,9 +270,11 @@ export async function verifyReceipts(
   jobID: string,
   sourceDigest: string,
   results: readonly ImportJobSchema.FileSetResult[],
+  borrowed?: Lease,
 ) {
   if (results.length === 0) return
-  await using windows = await openWindows(target)
+  await using owned = borrowed ? undefined : await openWindows(target)
+  const windows = borrowed ?? owned
   for (const result of results) {
     const manifest = await readManifest(target, jobID, result.sourceId, sourceDigest)
     if (CanonicalJson.stringify(manifest.result) !== CanonicalJson.stringify(result))
@@ -289,8 +291,10 @@ export async function reconcile(
   sourceDigest: string,
   manifestHash: string,
   database: Parameters<Parameters<typeof ImportJob.withDestinationFence>[1]>[0],
+  borrowed?: Lease,
 ) {
-  await using windows = await openWindows(target)
+  await using owned = borrowed ? undefined : await openWindows(target)
+  const windows = borrowed ?? owned
   const manifest = await readManifest(target, jobID, batchID, sourceDigest)
   if (manifest.result.manifestHash !== manifestHash)
     throw new Error("IMPORT_FILE_MANIFEST_CHANGED: manifest differs from the control-frozen batch")
@@ -536,7 +540,7 @@ export async function run(input: {
   }
 }
 
-async function openWindows(target: ImportTarget, prepare = false) {
+export async function openWindows(target: ImportTarget, prepare = false) {
   if (process.platform !== "win32") return
   const { WindowsFileSet } = await import("./windows-file-set")
   return WindowsFileSet.open(path.dirname(target.dataRoot), prepare)

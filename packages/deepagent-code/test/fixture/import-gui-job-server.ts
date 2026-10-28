@@ -24,6 +24,11 @@ const stage = (phase: string, facts: { activeBatch?: "prepare" | "other" | "none
 stage("fixture-module-loaded")
 const abort = new AbortController()
 process.once("SIGTERM", () => abort.abort())
+if (process.platform === "win32")
+  void Bun.stdin.text().then((input) => {
+    if (input !== "STOP\n") throw new Error("Invalid owned import fixture stop packet")
+    abort.abort()
+  })
 stage("acquiring-http-and-database")
 await Effect.runPromise(
   Effect.scoped(

@@ -472,75 +472,117 @@ export const make = Effect.gen(function* () {
     // Hold the destination DB writer lock through receipt reconciliation and CAS. Any
     // late batch checks the control row only AFTER obtaining that same writer lock.
     if (row.owner_lease_expires_at === null || row.owner_lease_expires_at <= Date.now()) {
-      const settle = (destination?: Parameters<Parameters<typeof ImportJob.withDestinationFence>[1]>[0]) =>
+      yield* Effect.scoped(
         Effect.gen(function* () {
-          const latest = yield* ImportJob.get(id).pipe(Effect.provideService(Database.Service, database))
-          if (!latest || ImportJobSchema.terminal(latest.state)) return
-          const proof =
-            latest.target && !latest.request.dryRun
-              ? yield* ImportJob.receipts({
-                  filename: latest.target.dbPath,
-                  jobID: id,
-                  sourceDigest: latest.source_digest ?? undefined,
-                  includeResults: true,
-                }).pipe(Effect.option)
+          // Prepare the Windows read-only OS process before the existing short writer-fence budget.
+          // This lease belongs to this explicit cancel; no polling, background retry or global pool.
+          // This observation only selects preparation. Authority and receipts are reloaded below
+          // under the original writer fence; a late file receipt without a lease stays unknown.
+          const advisory =
+            process.platform === "win32" && row.target && !row.request.dryRun
+              ? yield* ImportJob.receipts({ filename: row.target.dbPath, jobID: id, includeResults: true }).pipe(
+                  Effect.option,
+                )
               : undefined
-          const files = yield* Effect.tryPromise(async () => {
-            if (!latest.target || latest.request.dryRun) return false
-            if (proof?._tag !== "Some") throw new Error("IMPORT_RECEIPT_UNAVAILABLE")
-            await ImportFileSet.verifyReceipts(latest.target, id, latest.source_digest!, proof.value.fileResults)
-            if (!latest.active_batch_id?.startsWith("file_")) return false
-            if (!destination) throw new Error("IMPORT_FILE_FENCE_UNAVAILABLE")
-            const bound = /^(file_[a-f0-9]{64}):([a-f0-9]{64})$/.exec(latest.active_batch_id)
-            // Publication requires the bound identity in its control transaction. Under the
-            // physical writer fence, a cancelled raw batch therefore proves zero publication.
-            if (!bound && /^file_[a-f0-9]{64}$/.test(latest.active_batch_id)) return false
-            if (!bound) throw new Error("IMPORT_FILE_BATCH_INVALID")
-            return await ImportFileSet.reconcile(
-              latest.target,
-              id,
-              bound[1]!,
-              latest.source_digest!,
-              bound[2]!,
-              destination,
+          const windows = yield* Effect.acquireRelease(
+            Effect.tryPromise(() =>
+              process.platform === "win32" &&
+              row.target &&
+              !row.request.dryRun &&
+              (row.active_batch_id?.startsWith("file_") ||
+                (advisory?._tag === "Some" && advisory.value.fileResults.length > 0))
+                ? ImportFileSet.openWindows(row.target)
+                : Promise.resolve(undefined),
+            ).pipe(Effect.option),
+            (lease) =>
+              Effect.promise(async () => {
+                if (lease._tag === "Some") await lease.value?.[Symbol.asyncDispose]()
+              }),
+          )
+          const settle = (destination?: Parameters<Parameters<typeof ImportJob.withDestinationFence>[1]>[0]) =>
+            Effect.gen(function* () {
+              const latest = yield* ImportJob.get(id).pipe(Effect.provideService(Database.Service, database))
+              if (!latest || ImportJobSchema.terminal(latest.state)) return
+              const proof =
+                latest.target && !latest.request.dryRun
+                  ? yield* ImportJob.receipts({
+                      filename: latest.target.dbPath,
+                      jobID: id,
+                      sourceDigest: latest.source_digest ?? undefined,
+                      includeResults: true,
+                    }).pipe(Effect.option)
+                  : undefined
+              const files = yield* Effect.tryPromise(async () => {
+                if (!latest.target || latest.request.dryRun) return false
+                if (proof?._tag !== "Some") throw new Error("IMPORT_RECEIPT_UNAVAILABLE")
+                const needsWindows =
+                  process.platform === "win32" &&
+                  (proof.value.fileResults.length > 0 || latest.active_batch_id?.startsWith("file_"))
+                if (needsWindows && (windows._tag !== "Some" || !windows.value))
+                  throw new Error("IMPORT_FILE_FENCE_UNAVAILABLE")
+                const lease = windows._tag === "Some" ? windows.value : undefined
+                await ImportFileSet.verifyReceipts(
+                  latest.target,
+                  id,
+                  latest.source_digest!,
+                  proof.value.fileResults,
+                  lease,
+                )
+                if (!latest.active_batch_id?.startsWith("file_")) return false
+                if (!destination) throw new Error("IMPORT_FILE_FENCE_UNAVAILABLE")
+                const bound = /^(file_[a-f0-9]{64}):([a-f0-9]{64})$/.exec(latest.active_batch_id)
+                // Publication requires the bound identity in its control transaction. Under the
+                // physical writer fence, a cancelled raw batch therefore proves zero publication.
+                if (!bound && /^file_[a-f0-9]{64}$/.test(latest.active_batch_id)) return false
+                if (!bound) throw new Error("IMPORT_FILE_BATCH_INVALID")
+                return await ImportFileSet.reconcile(
+                  latest.target,
+                  id,
+                  bound[1]!,
+                  latest.source_digest!,
+                  bound[2]!,
+                  destination,
+                  lease,
+                )
+              }).pipe(Effect.option)
+              const known =
+                files._tag === "Some" &&
+                latest.active_batch_id !== "prepare" &&
+                (!latest.target || latest.request.dryRun || proof?._tag === "Some")
+              const count =
+                (proof?._tag === "Some" ? proof.value.count : latest.committed_batches) +
+                (files._tag === "Some" && files.value ? 1 : 0)
+              return {
+                id,
+                revision: latest.revision,
+                count,
+                known,
+                preparation: latest.active_batch_id === "prepare",
+              }
+            })
+          const fenced =
+            !row.target || row.request.dryRun || row.target.dbPath === liveDbPath
+              ? database.db
+                  .transaction(() => settle(), { behavior: "immediate" })
+                  .pipe(Effect.catch(() => Effect.succeed(undefined)))
+              : ImportJob.withDestinationFence(row.target.dbPath, (destination) =>
+                  Effect.runPromise(settle(destination)),
+                ).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          yield* flock
+            .withLock(
+              fenced.pipe(
+                Effect.flatMap((confirmation) =>
+                  confirmation
+                    ? ImportJob.confirmStopped(confirmation).pipe(Effect.provideService(Database.Service, database))
+                    : Effect.void,
+                ),
+              ),
+              `import-target:${row.target_key}`,
+              path.join(path.dirname(liveDbPath), ".import-locks"),
             )
-          }).pipe(Effect.option)
-          const known =
-            files._tag === "Some" &&
-            latest.active_batch_id !== "prepare" &&
-            (!latest.target || latest.request.dryRun || proof?._tag === "Some")
-          const count =
-            (proof?._tag === "Some" ? proof.value.count : latest.committed_batches) +
-            (files._tag === "Some" && files.value ? 1 : 0)
-          return {
-            id,
-            revision: latest.revision,
-            count,
-            known,
-            preparation: latest.active_batch_id === "prepare",
-          }
-        })
-      const fenced =
-        !row.target || row.request.dryRun || row.target.dbPath === liveDbPath
-          ? database.db
-              .transaction(() => settle(), { behavior: "immediate" })
-              .pipe(Effect.catch(() => Effect.succeed(undefined)))
-          : ImportJob.withDestinationFence(row.target.dbPath, (destination) =>
-              Effect.runPromise(settle(destination)),
-            ).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      yield* flock
-        .withLock(
-          fenced.pipe(
-            Effect.flatMap((confirmation) =>
-              confirmation
-                ? ImportJob.confirmStopped(confirmation).pipe(Effect.provideService(Database.Service, database))
-                : Effect.void,
-            ),
-          ),
-          `import-target:${row.target_key}`,
-          path.join(path.dirname(liveDbPath), ".import-locks"),
-        )
-        .pipe(Effect.timeoutOption("250 millis"), Effect.ignore)
+            .pipe(Effect.timeoutOption("250 millis"), Effect.ignore)
+        }),
+      )
     }
     return yield* read(id)
   })
