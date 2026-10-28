@@ -42,7 +42,13 @@ const configLayer = Config.layer.pipe(
 const instances = InstanceStore.defaultLayer.pipe(
   Layer.provide(Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))),
 )
-const layer = Layer.mergeAll(configLayer, instances, CrossSpawnSpawner.defaultLayer)
+// The compiled Windows launcher captures all homes before this business import.
+// Reuse production Root storage; source POSIX children keep their original layer.
+const { windowsStorageLayer } = process.platform === "win32"
+  ? await import("@/effect/root") : { windowsStorageLayer: Layer.empty }
+const layer = Layer.mergeAll(configLayer, instances, CrossSpawnSpawner.defaultLayer).pipe(
+  Layer.provideMerge(windowsStorageLayer),
+)
 phase("layer-enter")
 const result = await Effect.runPromiseExit(
   Effect.gen(function* () {

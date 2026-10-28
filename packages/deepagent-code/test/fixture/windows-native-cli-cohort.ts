@@ -185,12 +185,13 @@ export async function build(input: {
       toolchain, productionOwnerMaterial: false }))
     const state = { disposed: false, counter: 0, stops: new Set<() => Promise<void>>(), runs: new Set<Promise<unknown>>() }
     return { root, executable, components, payload: signed.payload, manifests,
-      async run(input: { args?: string[]; env?: Record<string, string>; stdin?: string | Uint8Array; milliseconds?: number } = {}) {
+      async run(input: { args?: string[]; env?: Record<string, string>; stdin?: string | Uint8Array; milliseconds?: number;
+        inheritEnvironment?: boolean } = {}) {
         assert(!state.disposed, "Native CLI cohort is disposed")
         assert((input.args ?? []).length <= 64 && (input.args ?? []).every((arg) => arg.length <= 8192 && !arg.includes("\0")))
         const milliseconds = input.milliseconds ?? 60_000
         assert(Number.isSafeInteger(milliseconds) && milliseconds > 0 && milliseconds <= runtimeLimit)
-        const env: Record<string, string | undefined> = environment(root, toolchain.rustupHome)
+        const env: Record<string, string | undefined> = environment(root, toolchain.rustupHome, input.inheritEnvironment !== false)
         for (const [name, value] of Object.entries(input.env ?? {})) {
           assert(/^[a-zA-Z_][a-zA-Z0-9_()]*$/.test(name) && !value.includes("\0"))
           const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase()) ?? name.toUpperCase()
@@ -230,10 +231,16 @@ export async function build(input: {
   }
 }
 
-function environment(root: string, rustupHome: string) {
+function environment(root: string, rustupHome: string, inherit = true) {
   return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-      !/^(?:DEEPAGENT_|DAC_|XDG_|BUN_OPTIONS$|NODE_OPTIONS$|ELECTRON_RUN_AS_NODE$)/i.test(name))),
+    ...(inherit ? Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+      !/^(?:DEEPAGENT_|DAC_|XDG_|BUN_OPTIONS$|NODE_OPTIONS$|ELECTRON_RUN_AS_NODE$)/i.test(name))) : {
+      SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT,
+      WINDIR: process.env.WINDIR,
+      ComSpec: process.env.ComSpec ?? process.env.COMSPEC,
+      SystemDrive: process.env.SystemDrive,
+      PATH: process.env.PATH,
+    }),
     HOME: path.join(root, "profile"), USERPROFILE: path.join(root, "profile"),
     APPDATA: path.join(root, "profile/appdata"), LOCALAPPDATA: path.join(root, "profile/localappdata"),
     TMPDIR: path.join(root, "tmp"), TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
