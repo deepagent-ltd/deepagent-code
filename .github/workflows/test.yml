@@ -253,6 +253,29 @@ jobs:
           test -x "$dac_work_file_helper"
           echo "DAC_WORK_FILE_HELPER_BINARY=$dac_work_file_helper" >> "$GITHUB_ENV"
 
+      - name: Prepare the fixed Linux CLI test runtime
+        if: runner.os == 'Linux' && matrix.suite == 'cli'
+        timeout-minutes: 10
+        # Bun #43856 crashes in NapiEnv teardown after passing --isolate files.
+        # Keep installation and dependency builds on the project's Bun 1.4.2.
+        run: |
+          test "$RUNNER_ARCH" = 'X64'
+          test "$(bun --version)" = '1.4.2'
+          bun turbo build --filter='deepagent-code^...'
+          dac_test_bun_root=$(mktemp -d "$RUNNER_TEMP/dac-linux-cli-bun143-XXXXXX")
+          # Official bun-v1.4.3 baseline asset 626789490, source c6da4a4d3010e5553438c60f6bd76d981976867c.
+          curl --fail --location --retry 2 --max-time 120 \
+            --output "$dac_test_bun_root/bun.zip" \
+            'https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64-baseline.zip'
+          printf '%s  %s\n' '1fc2edac843102909e3a1be1d8d9802cc6071cf074e67e88231f4ffe0f8b397b' \
+            "$dac_test_bun_root/bun.zip" | sha256sum --check -
+          mkdir "$dac_test_bun_root/bin"
+          unzip -q -j "$dac_test_bun_root/bun.zip" '*/bun' -d "$dac_test_bun_root/bin"
+          test -x "$dac_test_bun_root/bin/bun"
+          test "$("$dac_test_bun_root/bin/bun" --revision)" = '1.4.3+c6da4a4d3'
+          test "$("$dac_test_bun_root/bin/bun" -e 'process.stdout.write(Bun.revision)')" = 'c6da4a4d3010e5553438c60f6bd76d981976867c'
+          echo "$dac_test_bun_root/bin" >> "$GITHUB_PATH"
+
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
         run: |
@@ -279,7 +302,9 @@ jobs:
               bun turbo build --filter='@deepagent-code/app^...'
               dac_test_directory='packages/app'
             else
-              bun turbo build --filter='deepagent-code^...'
+              if [[ "$RUNNER_OS" != 'Linux' || "$DAC_TEST_SUITE" != 'cli' ]]; then
+                bun turbo build --filter='deepagent-code^...'
+              fi
               dac_test_directory='packages/deepagent-code'
             fi
             # Keep shard flags on the package test command, away from dependency compilers.
