@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import { Effect, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
@@ -36,6 +36,27 @@ const native = KernelLiveFirstSeenFixture.make({
 const config = { appkey: `private-output-proof-${native.server.port}`, navigator: native.server.url.origin, token: "private-first-seen-token", userID: "receiver", protectedMedia: true,
   identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }
 const client = Layer.provideMerge(KernelClient.layer, KernelSdk.liveFromConfig(config))
+const owned: { directory?: string } = {}
+
+beforeAll(async () => {
+  const started = performance.now()
+  owned.directory = await fs.mkdtemp(path.join(tmpdir(), "dac-output-proof-diagnostic-"))
+  // Cold schema preparation is fixture setup; each proof mode still reopens its own real store.
+  await Effect.runPromise(Effect.gen(function* () {
+    for (const mode of ["prepared", "consumer"]) {
+      yield* Effect.gen(function* () { yield* Database.Service }).pipe(
+        Effect.provide(Database.layerFromPath(path.join(owned.directory!, `${mode}.sqlite`))), Effect.scoped,
+      )
+      console.error(JSON.stringify({ stage: "owned-output-proof-setup", phase: "schema-ready",
+        elapsedMs: Math.round(performance.now() - started), consumer: mode === "consumer" }))
+    }
+  }).pipe(Effect.timeout("25 seconds")))
+}, 30_000)
+
+afterAll(async () => {
+  await native.server.stop(true)
+  if (owned.directory) await fs.rm(owned.directory, { recursive: true, force: true })
+})
 
 test("closed output proof diagnostics distinguish delayed prepared consumption from local business consumption without exposing proof identities or changing failure", async () => {
   const started = performance.now()
@@ -43,7 +64,8 @@ test("closed output proof diagnostics distinguish delayed prepared consumption f
     stage: "owned-output-proof-diagnostic", phase: name, elapsedMs: Math.round(performance.now() - started), consumer,
   }))
   phase("case-enter")
-  const directory = await fs.mkdtemp(path.join(tmpdir(), "dac-output-proof-diagnostic-"))
+  const directory = owned.directory
+  if (!directory) throw new Error("Original diagnostic databases were not prepared")
   phase("directory-ready")
   const initialLevel = Log.getLevel()
   try {
