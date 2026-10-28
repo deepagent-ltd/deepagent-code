@@ -6,6 +6,12 @@ import { WindowsNativeCliCohort } from "./windows-native-cli-cohort"
 export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
   const repository = path.resolve(import.meta.dir, "../../../..")
   const shim = path.join(import.meta.dir, "compiled-test-registry.ts")
+  const registrations = new Set([
+    path.join(import.meta.dir, "../mcp/auth-scope.cases.ts"),
+    path.join(import.meta.dir, "../mcp/oauth-auto-connect.cases.ts"),
+    path.join(import.meta.dir, "../lib/effect.ts"),
+    path.join(import.meta.dir, "fixture.ts"),
+  ].map((filename) => path.resolve(filename)))
   const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
   const expected = file === "auth-scope" ? 27 : 8
   beforeAll(async () => {
@@ -23,10 +29,15 @@ export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
       plugins: [{
         name: "original-mcp-case-registration",
         setup(builder) {
-          builder.onResolve({ filter: /^bun:test$/ }, (input) =>
-            path.resolve(input.importer) === shim
-              ? { path: "bun:test", external: true }
-              : { path: shim })
+          // Bun resolves its builtin before onResolve. Rewrite only these original
+          // test registration imports; the registry keeps Bun's real expect.
+          builder.onLoad({ filter: /\.ts$/ }, async (input) => {
+            if (!registrations.has(path.resolve(input.path))) return
+            const source = await fs.readFile(input.path, "utf8")
+            if ([...source.matchAll(/from (["'])bun:test\1/g)].length !== 1)
+              throw new Error("Original MCP registration import inventory changed")
+            return { contents: source.replace(/from (["'])bun:test\1/g, `from ${JSON.stringify(shim)}`), loader: "ts" }
+          })
         },
       }],
     })
