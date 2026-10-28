@@ -201,6 +201,27 @@ static void signalWatch(const std::shared_ptr<Watch>& watch, const char *origin,
   }
   napi_close_handle_scope(watch->env, scope);
 }
+static void lifecycleObserved(const std::shared_ptr<Watch>& watch, NSView *view, bool known) {
+  const char *diagnostics = std::getenv("DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS");
+  if (!diagnostics || std::strcmp(diagnostics, "1") != 0) return;
+  static std::atomic<unsigned> reported{0};
+  if (reported.fetch_add(1) >= 128) return;
+  // Read the original AppKit objects on their main thread before retirement.
+  // Scope-local strong references keep weak observations alive only for this log.
+  __strong NSWindow *window = watch->window;
+  __strong NSView *root = watch->root;
+  NSMutableArray<NSView *> *clients = [NSMutableArray new]; unsigned nodes = 0;
+  const bool collected = collectClients(root, watch->hooks, clients, 0, nodes);
+  bool same = collected && clients.count == watch->clients.size();
+  if (same) for (size_t i = 0; i < watch->clients.size(); i++) {
+    if (!watch->clients[i].view || clients[i] != watch->clients[i].view) { same = false; break; }
+  }
+  std::fprintf(stderr,
+    "MANAGED_BROWSER_INPUT_LIFECYCLE {\"at\":%lld,\"known\":%s,\"sameWindow\":%s,\"sameRoot\":%s,\"collected\":%s,\"expectedClients\":%zu,\"currentClientsCount\":%ld,\"sameClientSet\":%s}\n",
+    (long long)(NSDate.date.timeIntervalSince1970 * 1000), known ? "true" : "false",
+    window && view.window == window ? "true" : "false", window && root && window.contentView == root ? "true" : "false",
+    collected ? "true" : "false", watch->clients.size(), collected ? (long)clients.count : -1L, same ? "true" : "false");
+}
 static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
   if (!NSThread.isMainThread) { hooks->tainted.store(true); return; }
   const auto users = hooks->users;
@@ -209,6 +230,7 @@ static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
     const bool known = std::any_of(watch->clients.begin(), watch->clients.end(),
       [view](const auto& client) { return client.view == view; });
     if (!known && view.window != watch->window) continue;
+    if (lifecycle) lifecycleObserved(watch, view, known);
     if (lifecycle || !known || !currentWindow(watch)) {
       if (lifecycle || !known) sourceRejected(watch, lifecycle ? "client_view_moved" : "client_unobserved");
       watch->invalid = true; signalWatch(watch, "client_retirement"); releaseWatch(watch); continue;

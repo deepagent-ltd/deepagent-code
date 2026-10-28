@@ -17,7 +17,8 @@ test.skipIf(process.platform !== "darwin")("actual private browser host grants e
   expect(main.success && child.success).toBe(true)
   const process = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
     env: { ...managedBrowserInputFixtureEnvironment, PATH: globalThis.process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
-      XDG_CACHE_HOME: root, DAC_BROWSER_TEST_ROOT: root, DAC_BROWSER_CHILD: child.outputs[0]!.path }, stdout: "pipe", stderr: "pipe",
+      XDG_CACHE_HOME: root, DAC_BROWSER_TEST_ROOT: root, DAC_BROWSER_CHILD: child.outputs[0]!.path,
+      DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS: "1" }, stdout: "pipe", stderr: "pipe",
   })
   const timer = setTimeout(() => process.kill(), 55_000)
   const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()])
