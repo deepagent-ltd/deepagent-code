@@ -31,19 +31,28 @@ const run = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientServic
 
 describe("V2 provider owner containment", () => {
   test("upgrades pre-V2 and pre-campaign disk databases without losing durable sessions", async () => {
+    const started = performance.now()
+    const trace = (phase: string, cut?: number) => console.info(JSON.stringify({
+      test: "provider-cutover-upgrade", phase, elapsedMs: Math.round(performance.now() - started), cut,
+    }))
+    trace("case-enter")
     await using tmp = await tmpdir()
+    trace("directory-ready")
     const cuts = ["20260813041200_v2_provider_shadow_authority", "20260813120346_v2_provider_parity_campaign"] as const
     const qualifications: boolean[] = []
 
     for (const cut of cuts) {
+      trace("cut-start", cuts.indexOf(cut))
       const filename = `${tmp.path}/${cut}.sqlite`
       await run(
         filename,
         Effect.gen(function* () {
           const db = yield* makeDb
+          trace("database-ready", cuts.indexOf(cut))
           const cutIndex = migrations.findIndex((migration) => migration.id === cut)
           expect(cutIndex).toBeGreaterThan(0)
           yield* DatabaseMigration.applyOnly(db, migrations.slice(0, cutIndex))
+          trace("legacy-schema-ready", cuts.indexOf(cut))
 
           const projectID = ProjectV2.ID.make(`project-${cut}`)
           const sessionID = SessionSchema.ID.make(`ses_${cut}`)
@@ -62,6 +71,7 @@ describe("V2 provider owner containment", () => {
             )
 
           yield* DatabaseMigration.applyOnly(db, migrations)
+          trace("upgrade-complete", cuts.indexOf(cut))
           expect(
             yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get(),
           ).toEqual({ id: sessionID })
@@ -75,6 +85,7 @@ describe("V2 provider owner containment", () => {
           expect(qualifications.slice(-2)).toEqual([false, false])
 
           yield* DatabaseMigration.applyOnly(db, migrations)
+          trace("exact-reapply-complete", cuts.indexOf(cut))
           expect(
             yield* db.get<{ count: number }>(
               sql`SELECT count(*) AS count FROM migration WHERE id = ${migrations.at(-1)!.id}`,
@@ -82,7 +93,9 @@ describe("V2 provider owner containment", () => {
           ).toEqual({ count: 1 })
         }),
       )
+      trace("database-scope-closed", cuts.indexOf(cut))
     }
+    trace("case-body-complete")
   })
 
   test("requires an exact, active, build-bound owner authorization", async () => {
@@ -189,7 +202,13 @@ describe("V2 provider owner containment", () => {
   })
 
   test("takes over an expired process owner without replay and leaves a rollback-safe database", async () => {
+    const started = performance.now()
+    const trace = (phase: string) => console.info(JSON.stringify({
+      test: "provider-cutover-expired-owner", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    trace("case-enter")
     await using tmp = await tmpdir()
+    trace("directory-ready")
     const filename = `${tmp.path}/takeover.sqlite`
     const marker = `${tmp.path}/physical-dispatch.json`
     const fixture = new URL("./fixture/v2-provider-owner-process.ts", import.meta.url)
@@ -198,20 +217,25 @@ describe("V2 provider owner containment", () => {
       stdout: "pipe",
       stderr: "pipe",
     })
+    trace("dispatch-started")
     const firstOutput = await new Response(first.stdout).text()
     const firstError = await new Response(first.stderr).text()
     expect(await first.exited, firstError).toBe(0)
+    trace("dispatch-exited")
     const dispatched = JSON.parse(firstOutput) as { receiptId: string }
 
     await Bun.sleep(650)
+    trace("expiry-wait-complete")
     const second = Bun.spawn([process.execPath, fileURLToPath(fixture), "recover", filename, marker, dispatched.receiptId], {
       cwd: import.meta.dir,
       stdout: "pipe",
       stderr: "pipe",
     })
+    trace("recover-started")
     const secondOutput = await new Response(second.stdout).text()
     const secondError = await new Response(second.stderr).text()
     expect(await second.exited, secondError).toBe(0)
+    trace("recover-exited")
     expect(JSON.parse(secondOutput)).toEqual({
       state: "indeterminate_after_crash",
       errorCode: "owner_lost_after_dispatch",
@@ -220,5 +244,6 @@ describe("V2 provider owner containment", () => {
       oldOwnerHeartbeat: "provider_owner_lease_not_live",
       physicalDispatches: 1,
     })
+    trace("case-body-complete")
   }, 15_000)
 })

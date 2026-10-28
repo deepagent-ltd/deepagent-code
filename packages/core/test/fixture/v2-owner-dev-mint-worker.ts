@@ -11,6 +11,7 @@ import { V2OwnerDevMint } from "../../src/session/runner/v2-owner-dev-mint"
 import { EffectFlock } from "../../src/util/effect-flock"
 
 const input = JSON.parse(process.argv[2]!) as { readonly database: string; readonly state: string }
+process.env.DAC_TEST_OWNER_PREFLIGHT_ROOT = input.state
 process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT = "1"
 delete process.env.DEEPAGENT_CODE_V2_OWNER_CAMPAIGN
 delete process.env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY

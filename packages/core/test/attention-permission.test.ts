@@ -22,16 +22,29 @@ describe("current no-progress attention", () => {
     "projects current approvals across projects, paginates with failures and reads without execution or writes",
     () =>
       Effect.gen(function* () {
+        const started = performance.now()
+        const trace = (phase: string) => console.info(JSON.stringify({
+          test: "attention-current-approvals", phase, elapsedMs: Math.round(performance.now() - started),
+        }))
+        trace("case-enter")
+        yield* Effect.addFinalizer(() => Effect.sync(() => trace("case-resources-finalized")))
         const directory = yield* temporary
+        trace("directory-ready")
         yield* Effect.gen(function* () {
+          trace("database-services-ready")
           const database = yield* Database.Service
           const attention = yield* Attention.Service
           const a = yield* challenge(database, "a")
+          trace("challenge-a-ready")
           const b = yield* challenge(database, "b", { project: "project-b" })
+          trace("challenge-b-ready")
           yield* challenge(database, "remote", { workspace: "wrk_remote" })
+          trace("challenge-remote-ready")
           yield* seedActivity(database, a.sessionID, "failed", "failed", 200)
+          trace("seed-complete")
           const before = yield* changes(database)
           const first = yield* attention.list({ limit: 1 })
+          trace("first-page-ready")
           const second = yield* attention.list({ limit: 1, cursor: first.nextCursor })
           const third = yield* attention.list({ limit: 1, cursor: second.nextCursor })
           expect(first.unseenCount).toBe(3)
@@ -63,7 +76,9 @@ describe("current no-progress attention", () => {
           expect(
             yield* database.db.get(sql`SELECT count(*) AS value FROM ${V2ProviderTurnReceiptTable}`).pipe(Effect.orDie),
           ).toEqual({ value: 0 })
+          trace("body-complete")
         }).pipe(Effect.provide(services(path.join(directory, "approval.db"))))
+        trace("provided-effect-returned")
       }),
   )
 

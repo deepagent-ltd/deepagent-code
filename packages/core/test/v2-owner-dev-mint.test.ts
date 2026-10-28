@@ -195,6 +195,12 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
       preflight: results.flatMap((result) => result.stderr.split("\n")
         .filter((line) => line.startsWith("[preflight] database runtime lock held: "))
         .map((line) => JSON.parse(line.slice("[preflight] database runtime lock held: ".length)))),
+      closedReadOnlyStages: results.flatMap((result) => result.stderr.split("\n")
+        .filter((line) => line.startsWith("[owner-preflight-stage] "))
+        .map((line) => JSON.parse(line.slice("[owner-preflight-stage] ".length)))),
+      sqliteReadErrors: results.flatMap((result) => result.stderr.split("\n")
+        .filter((line) => line.startsWith("[owner-preflight-sqlite] "))
+        .map((line) => JSON.parse(line.slice("[owner-preflight-sqlite] ".length)))),
     }))
     expect(results.map((result) => JSON.parse(result.stdout).minted)).toEqual([true, true])
 
@@ -229,6 +235,27 @@ describe("V2OwnerDevMint.ensureDevOwnerAuthorization", () => {
 function ownedContention(line: string, owner: {
   database: string; pids: readonly (number | undefined)[]; hostname: string; startedAt: number; closedAt: number
 }) {
+  if (line.startsWith("[owner-preflight-sqlite] ")) {
+    const text = line.slice("[owner-preflight-sqlite] ".length)
+    const observation = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({
+      pid: Schema.Int, stage: Schema.Literals(["connection", "inspection"]), code: Schema.String,
+      errno: Schema.NullOr(Schema.Int), immutable: Schema.Boolean, attempt: Schema.Int,
+    })))(text)
+    return Option.isSome(observation) && owner.pids.includes(observation.value.pid) &&
+      observation.value.attempt >= 0 && observation.value.attempt <= 3 &&
+      (observation.value.code === "unknown" || /^[A-Z][A-Z0-9_]{0,63}$/.test(observation.value.code)) &&
+      JSON.stringify(observation.value) === text
+  }
+  if (line.startsWith("[owner-preflight-stage] ")) {
+    const text = line.slice("[owner-preflight-stage] ".length)
+    const observation = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({
+      pid: Schema.Int, stage: Schema.Literals(["observed", "ordinary-read", "ordinary-observations", "stamp-refused", "active-owner",
+        "lease-refused", "guard-refused", "inspection-refused", "inspection-ready", "post-refused"]),
+      exists: Schema.Boolean, header: Schema.Boolean, readable: Schema.Boolean, walMode: Schema.Boolean,
+      wal: Schema.Boolean, shm: Schema.Boolean, active: Schema.Boolean, leaseTimeout: Schema.Boolean,
+    })))(text)
+    return Option.isSome(observation) && owner.pids.includes(observation.value.pid) && JSON.stringify(observation.value) === text
+  }
   if (line === `[db-runtime-lock] waiting for ${owner.database}.runtime.lock (held by another process)`) return true
   const prefix = "[preflight] database runtime lock held: "
   if (!line.startsWith(prefix)) return false
