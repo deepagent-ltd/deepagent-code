@@ -456,7 +456,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
       timeout: Math.max(1, Math.min(progress.startedAt + 25000, copyDeadline) - Date.now()),
     })
     expect(screen.queryByText(dict["settings.import.job.imported"])).toBeNull()
-    expect(screen.getByText(dict["settings.import.job.copyComplete"])).toBeTruthy()
+    expect(await screen.findByText(dict["settings.import.job.copyComplete"], undefined, {
+      timeout: Math.max(1, Math.min(progress.startedAt + 25000, copyDeadline) - Date.now()),
+    })).toBeTruthy()
     await shownJob(accepted.data!.id)
     expect(screen.getByDisplayValue(/Manifest: [a-f0-9]{64}/)).toBeTruthy()
     const retried = await client.global.importCreate(original)
