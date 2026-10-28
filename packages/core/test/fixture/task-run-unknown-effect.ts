@@ -4,7 +4,10 @@ import path from "node:path"
 // controlled LLM script or TestClock with unrelated dispatcher fixtures. All data is private.
 const root = process.argv[2]
 if (!root || !path.isAbsolute(root)) throw new Error("A private absolute fixture root is required")
+const started = performance.now()
 await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => Bun.$`mkdir -p ${path.join(root, name)}`.quiet()))
+console.error(JSON.stringify({ test: "task-unknown-custody-process", phase: "child-spawn",
+  elapsedMs: Math.round(performance.now() - started) }))
 const child = Bun.spawn({
   cmd: [process.execPath, "test", "test/task-run-dispatcher.test.ts", "--test-name-pattern", "timed-out real mutation", "--timeout", "10000"],
   cwd: path.resolve(import.meta.dirname, "../.."),
@@ -15,6 +18,8 @@ const child = Bun.spawn({
   stdout: "pipe", stderr: "pipe",
 })
 const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+console.error(JSON.stringify({ test: "task-unknown-custody-process", phase: "child-exited", status,
+  elapsedMs: Math.round(performance.now() - started) }))
 if (status !== 0) throw new Error(`Private unknown custody fixture failed (${status}): ${stdout}${stderr}`)
 process.stdout.write(stdout)
 process.stderr.write(stderr)

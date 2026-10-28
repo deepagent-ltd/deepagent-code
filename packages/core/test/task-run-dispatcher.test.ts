@@ -544,6 +544,14 @@ const settleCompleted = (db: DatabaseService, runID: string) =>
 describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
   it.live("a timed-out real mutation retains unknown custody without a terminal receipt, outbox or replay", () =>
     Effect.gen(function* () {
+      const started = performance.now()
+      const trace = (phase: string) => {
+        if (process.env.DAC_TASK_UNKNOWN_ACTUAL !== "1") return
+        console.error(JSON.stringify({ test: "task-unknown-custody", phase,
+          elapsedMs: Math.round(performance.now() - started) }))
+      }
+      trace("case-enter")
+      yield* Effect.addFinalizer(() => Effect.sync(() => trace("case-resources-finalized")))
       if (process.env.DAC_TASK_UNKNOWN_ACTUAL !== "1") {
         const root = yield* Effect.promise(tmpdir)
         yield* Effect.addFinalizer(() => Effect.promise(() => root[Symbol.asyncDispose]()))
@@ -556,6 +564,7 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
         return
       }
       yield* setup
+      trace("setup-ready")
       sealRequests = true
       const db = (yield* Database.Service).db
       const sessions = yield* SessionV2.Service
@@ -569,9 +578,11 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       }) })
       const parent = yield* sessions.create({ location: { directory } })
       const submitted = yield* submitBackground(parent.id, "call-unknown-mutating-effect")
+      trace("background-admitted")
       response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "call-mutate-once", name: "mutate_once", input: {} }),
         LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })]
       const result = yield* TaskRunAuthority.execute({ db, run: submitted.run, sessions, timeoutMs: 150 })
+      trace("execution-returned")
       expect(result.outcome).toBe("recovery_required")
       expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
       const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.run_id, submitted.run.runID)).get()
@@ -614,6 +625,7 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       expect(yield* (yield* TaskRunDispatcher.Service).tick).toBe(0)
       expect(streamRequests).toBe(1)
       expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
+      trace("assertions-complete")
     }),
   )
   it.effect("a canonical background wait returns after its launch activity settles, exactly once", () =>

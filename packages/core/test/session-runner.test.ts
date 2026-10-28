@@ -5939,7 +5939,17 @@ describe("SessionRunnerLLM", () => {
 
   it.effect("quarantines an unknown tool outcome without replaying its body", () =>
     Effect.gen(function* () {
+      const started = performance.now()
+      const trace = (phase: string) => {
+        if (!process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB) return
+        console.error(JSON.stringify({ test: "runner-unknown-process", phase,
+          recovering: process.env.DEEPAGENT_TEST_RUNNER_EFFECT_PHASE === "recover",
+          elapsedMs: Math.round(performance.now() - started) }))
+      }
+      trace("case-enter")
+      yield* Effect.addFinalizer(() => Effect.sync(() => trace("case-resources-finalized")))
       yield* setup
+      trace("setup-ready")
       const session = yield* SessionV2.Service
       const registry = yield* ToolRegistry.Service
       const { db } = yield* Database.Service
@@ -6008,6 +6018,7 @@ describe("SessionRunnerLLM", () => {
       }
 
       const first = yield* session.resume(id).pipe(Effect.exit)
+      trace("first-resume-returned")
       expect(Exit.isFailure(first)).toBe(true)
       if (Exit.isFailure(first))
         expect(Cause.squash(first.cause)).toBeInstanceOf(
@@ -6055,6 +6066,7 @@ describe("SessionRunnerLLM", () => {
       expect(inputs[0]?.promoted_seq).not.toBeNull()
 
       const retry = yield* session.resume(id).pipe(Effect.exit)
+      trace("retry-resume-returned")
       expect(Exit.isFailure(retry)).toBe(true)
       if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toBeInstanceOf(V2ToolEffect.RecoveryRequiredError)
       expect(requests).toHaveLength(recovering ? 0 : 1)
@@ -6081,6 +6093,7 @@ describe("SessionRunnerLLM", () => {
       expect(
         yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, id)).all().pipe(Effect.orDie),
       ).toEqual(inputs)
+      trace("assertions-complete")
       if (databaseFile)
         yield* Effect.promise(() =>
           Bun.write(
@@ -6097,6 +6110,7 @@ describe("SessionRunnerLLM", () => {
             }),
           ),
         )
+      trace("receipt-written")
     }),
   )
 
