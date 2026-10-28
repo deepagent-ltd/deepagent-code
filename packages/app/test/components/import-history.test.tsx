@@ -405,7 +405,8 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     })
     expect(accepted.data?.id).toBeTruthy()
     progress.phase = `copy ${accepted.data!.id}`
-    observe("copy-wait-start", { deadlineAt: Date.now() + 10000 })
+    const copyDeadline = Date.now() + 10000
+    observe("copy-wait-start", { deadlineAt: copyDeadline })
     await waitFor(
       async () => {
         const current = await client.global.importGet({ jobID: accepted.data!.id })
@@ -445,7 +446,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     )
     observe("copy-completed")
     fireEvent.click(screen.getByRole("button", { name: dict["settings.import.job.refresh"] }))
-    await screen.findByText(dict["settings.import.job.fileSets"])
+    await screen.findByText(dict["settings.import.job.fileSets"], undefined, {
+      timeout: Math.max(1, Math.min(progress.startedAt + 25000, copyDeadline) - Date.now()),
+    })
     expect(screen.queryByText(dict["settings.import.job.imported"])).toBeNull()
     expect(screen.getByText(dict["settings.import.job.copyComplete"])).toBeTruthy()
     await shownJob(accepted.data!.id)

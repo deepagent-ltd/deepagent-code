@@ -237,6 +237,7 @@ async function processFor(root: string, count: number) {
   return {
     root,
     ready,
+    deadlineAt: startedAt + 60_000,
     client,
     calls,
     transport,
@@ -278,13 +279,16 @@ async function chooseSource(sourcePath: string) {
   fireEvent.click(screen.getByRole("checkbox", { name: "Skills" }))
   fireEvent.click(screen.getByRole("button", { name: "Import" }))
 }
-async function diagnostics(jobID: string) {
-  const button = await screen.findByRole("button", { name: dict["settings.import.job.details"] })
+async function diagnostics(jobID: string, deadlineAt: number) {
+  const button = await screen.findByRole("button", { name: dict["settings.import.job.details"] }, {
+    timeout: Math.max(1, deadlineAt - Date.now()),
+  })
   if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button)
   await waitFor(() =>
     expect(
       (screen.getByRole("textbox", { name: dict["settings.import.job.diagnosticText"] }) as HTMLTextAreaElement).value,
     ).toContain(`Job: ${jobID}`),
+    { timeout: Math.max(1, deadlineAt - Date.now()) },
   )
 }
 
@@ -361,7 +365,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
     fireEvent.click(screen.getByRole("button", { name: dict["settings.import.job.refreshOne"] }))
     await screen.findByText(new RegExp(dict["settings.import.job.stopped"]))
     expect(screen.getByText(dict["settings.import.job.partial"])).toBeTruthy()
-    await diagnostics(first.id)
+    await diagnostics(first.id, Math.min(progress.startedAt + 60_000, a.deadlineAt))
     await publishImportFixturePacket(path.join(a.root, "inspect.json"), { jobID: first.id, name: "partial-proof" })
     const partial = await waitFor(
       async () =>
@@ -423,6 +427,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
         view.unmount()
       }
       surface.happyDOM.setURL(a.ready.url)
+      const copyDeadline = Date.now() + 15_000
       await waitFor(
         async () => {
           const current = await a.client.global.importGet({ jobID: accepted.id })
@@ -446,7 +451,7 @@ it("actual durable copy jobs isolate scope/instance/unmount packet loss, reopen 
       setOwner({ scope: "private-a", url: a.ready.url, client: a.client })
       a.transport.gate = undefined
       view = render(() => <ImportSection />)
-      await diagnostics(accepted.id)
+      await diagnostics(accepted.id, Math.min(progress.startedAt + 60_000, a.deadlineAt, copyDeadline))
       expect(a.posts()).toBe(beforePosts + 1)
       expect(screen.getByText(dict["settings.import.job.copyComplete"])).toBeTruthy()
       view.unmount()
