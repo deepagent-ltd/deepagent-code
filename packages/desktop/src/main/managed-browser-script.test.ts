@@ -25,6 +25,10 @@ test.skipIf(process.platform !== "darwin")("actual private browser host grants e
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_SCRIPT_EVIDENCE", root)
+  if (code) stderr.split(/\r?\n/).filter((line) => line.length <= 768 && (
+    /^MANAGED_BROWSER_INPUT_DIAGNOSTIC \{"at":\d{1,16},"reason":"[a-z_]{1,64}","expectedClients":\d{1,3},"actualClients":-?\d{1,4}\}$/.test(line) ||
+    /^MANAGED_BROWSER_INPUT_LIFECYCLE \{"at":\d{1,16},"known":(?:true|false),"sameWindow":(?:true|false),"sameRoot":(?:true|false),"collected":(?:true|false),"expectedClients":\d{1,3},"currentClientsCount":-?\d{1,4},"sameClientSet":(?:true|false)\}$/.test(line)
+  )).slice(-20).forEach((line) => console.error(line))
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect({ code, error: code ? result : null }).toEqual({ code: 0, error: null })
   expect(result.deniedTCP).toBe(0)

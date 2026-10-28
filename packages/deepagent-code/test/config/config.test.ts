@@ -1258,31 +1258,45 @@ it.instance(
       yield* config.get()
       let signal = Deferred.makeUnsafe<void>()
       let calls = 0
+      let phase = "directory removal"
+      const started = performance.now()
+      const events: string[] = []
+      const observe = (event: string) => events.push(
+        `${Math.round(performance.now() - started)}ms:${phase}:${event}:callbacks=${calls},directory=${existsSync(pluginDir)},rebuilt=${existsSync(path.join(pluginDir, "rebuilt.ts"))}`,
+      )
       const wait = (phase: string) => Deferred.await(signal).pipe(Effect.timeoutOrElse({
         duration: "5 seconds",
         orElse: () => Effect.fail(new Error(
-          `plugin watcher ${phase}: callbacks=${calls}, directory=${existsSync(pluginDir)}, rebuilt=${existsSync(path.join(pluginDir, "rebuilt.ts"))}`,
+          `plugin watcher ${phase}: callbacks=${calls}, directory=${existsSync(pluginDir)}, rebuilt=${existsSync(path.join(pluginDir, "rebuilt.ts"))}, events=${JSON.stringify(events)}`,
         )),
       }))
       const stop = yield* config.watch!(() =>
         Effect.gen(function* () {
           calls++
+          observe("callback")
           yield* Deferred.succeed(signal, undefined)
         }),
       )
       yield* Effect.addFinalizer(() => Effect.sync(stop))
 
       yield* Effect.promise(() => fs.rm(pluginDir, { recursive: true }))
+      observe("rm resolved")
       yield* wait("directory removal")
+      observe("removal observed")
+      phase = "directory rebuild"
       signal = Deferred.makeUnsafe<void>()
       yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "rebuilt.ts"), "export default {}\n")
+      observe("write resolved")
       yield* wait("directory rebuild")
       yield* Effect.sleep("200 millis")
 
       const beforeEdit = calls
+      phase = "rebuilt plugin edit"
       signal = Deferred.makeUnsafe<void>()
       yield* FSUtil.use.writeFileString(path.join(pluginDir, "rebuilt.ts"), "export default { id: 'edited' }\n")
+      observe("write resolved")
       yield* wait("rebuilt plugin edit")
+      console.error("CONFIG_PLUGIN_WATCH_PHASES", JSON.stringify(events))
       expect(calls).toBe(beforeEdit + 1)
     }),
   {

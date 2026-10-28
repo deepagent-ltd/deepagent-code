@@ -182,7 +182,9 @@ async function main() {
           throw new Error(`Fixture activity did not settle: ${JSON.stringify(activity)}`)
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests; background=${JSON.stringify(backgroundWork(database))}`)
+      const activity = database.prepare("SELECT a.state, s.execution_claim_token IS NOT NULL AS claimActive FROM session_activity a JOIN session s ON s.id=a.session_id WHERE a.session_id=? ORDER BY a.ordinal DESC LIMIT 1").get(sessionID)
+      const turns = database.prepare("SELECT request_ordinal, state, error_code FROM session_v2_provider_turn_receipt WHERE session_id=? ORDER BY request_ordinal DESC LIMIT 8").all(sessionID)
+      throw new Error(`Fixture activity did not settle after ${bodies.length}/${requests} provider requests; providerFinished=${providerFinished}; activity=${JSON.stringify(activity)}; turns=${JSON.stringify(turns)}; background=${JSON.stringify(backgroundWork(database))}`)
     } finally { database.close() }
   }
   try {
