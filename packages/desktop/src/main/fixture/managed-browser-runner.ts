@@ -200,6 +200,16 @@ async function main() {
         AND e.session_id=a.session_id AND e.tool_name=a.tool_name
       WHERE a.session_id=? AND a.tool_name='browser' AND a.tool_call_id='call_browser_1'`).all(sessionID)
     try {
+      const started = performance.now()
+      // The first provider turn runs the real plan tool and cold project setup.
+      // Start the denial window only after the Browser provider response is sent.
+      const readyDeadline = Date.now() + 15_000
+      while (providerFinished < 2 && Date.now() < readyDeadline)
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      if (providerFinished < 2)
+        throw new Error(`Fixture Browser request was not ready after ${bodies.length}/2 provider requests; providerFinished=${providerFinished}`)
+      console.log(JSON.stringify({ test: "browser-rejection", phase: "browser-provider-ready",
+        elapsedMs: Math.round(performance.now() - started), providerFinished }))
       const deadline = Date.now() + duration
       while (Date.now() < deadline) {
         if (bodies.length > 3) throw new Error("Fixture Browser rejection made an unexpected provider request")
@@ -285,9 +295,12 @@ async function main() {
       const db = new DatabaseSync(path.join(root, "authority.sqlite"))
       const changed = { ...control.control, origin: "http://127.0.0.1:1" }
       const record = CanonicalJson.stringify(changed)
-      db.prepare("UPDATE browser_control SET origin = ?, record = ?, record_hash = ? WHERE control_id = ?").run(
-        changed.origin, record, createHash("sha256").update(record).digest("hex"), controlID)
-      db.close()
+      try {
+        // Match the other owned mutation probes while the sidecar finishes its write.
+        db.exec("PRAGMA busy_timeout=5000")
+        db.prepare("UPDATE browser_control SET origin = ?, record = ?, record_hash = ? WHERE control_id = ?").run(
+          changed.origin, record, createHash("sha256").update(record).digest("hex"), controlID)
+      } finally { db.close() }
     }
     const invokeDirectory = mode === "wrong-root" ? path.join(root, "other-project") : directory
     if (mode === "wrong-root") {
