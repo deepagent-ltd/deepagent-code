@@ -207,7 +207,12 @@ impl FirstLoad {
             // Match the actual mapped image to that held namespace rather than
             // acquiring a second copy of its entire immutable directory chain.
             if current_changed(role, "mapped-path", || Ok(name != image.observed))?
-                || current_changed(role, "stamp", || Ok(current_stamp(role, current_system_stamp(image, no_follow::stamp(&image.path.file)?), &image.stamp) != image.stamp))?
+                || current_changed(role, "stamp", || {
+                    let actual = no_follow::stamp(&image.path.file)?;
+                    if current_stamp_valid(image, &actual) { return Ok(false); }
+                    current_stamp(role, actual, &image.stamp);
+                    Ok(true)
+                })?
                 || current_changed(role, "identity", || Ok(no_follow::identity(&image.path.file)? != image.description.identity))? {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
@@ -243,22 +248,14 @@ fn current_stamp(role: &'static str, actual: String, expected: &str) -> String {
     }
     actual
 }
-fn current_system_stamp(image: &Image, actual: String) -> String {
-    if image.description.system && current_only_change(&actual, &image.stamp) {
-        let content = match current_content_same(image, &actual) { Ok(true) => "true", Ok(false) => "false", Err(_) => "unknown" };
-        // This is the original machine policy's current result, not an exact
-        // comparison of captured ACL bytes or a replacement acceptance rule.
-        let machine = match require_machine(&image.path.file) {
-            Ok(()) => "true",
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && error.raw_os_error().is_none() => "false",
-            Err(_) => "unknown",
-        };
-        let name = image.observed.file_name().and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty() && name.len() <= 128 && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
-            .unwrap_or("system-image");
-        eprintln!("dac-native-first-load-change-only:{name}:content_same={content}:machine_trusted={machine}");
-    }
-    actual
+fn current_stamp_valid(image: &Image, actual: &str) -> bool {
+    if actual == image.stamp { return true; }
+    // A System32 ChangeTime-only update must preserve the original held bytes
+    // and machine policy. The captured stamp and description remain immutable.
+    image.description.system && current_only_change(actual, &image.stamp)
+        && current_content_same(image, actual).unwrap_or(false)
+        && require_machine(&image.path.file).is_ok()
+        && no_follow::stamp(&image.path.file).is_ok_and(|stamp| stamp == actual)
 }
 fn current_only_change(actual: &str, expected: &str) -> bool {
     let left = actual.rsplitn(8, ':').collect::<Vec<_>>();
