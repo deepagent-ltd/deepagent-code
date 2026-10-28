@@ -2,12 +2,17 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { createRequire } from "node:module"
 
 test("actual bare Node HTTP refuses native creation without host or configured authentication", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-http-closed-")))
   await fs.chmod(root, 0o700)
   // Node sidecar externals are shipped by Desktop, including its Node-ABI PTY selector.
-  await fs.symlink(path.resolve(import.meta.dir, "../../../desktop/node_modules"), path.join(root, "node_modules"), "dir")
+  const require = createRequire(await fs.realpath(path.resolve(import.meta.dir, "../../../desktop/package.json")))
+  await fs.mkdir(path.join(root, "node_modules/@lydell"), { recursive: true })
+  await Promise.all(["jsonc-parser", "@lydell/node-pty"].map(async (name) =>
+    fs.symlink(await fs.realpath(path.dirname(require.resolve(`${name}/package.json`))),
+      path.join(root, "node_modules", name), process.platform === "win32" ? "junction" : "dir")))
   const build = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/http-closed.ts")],
     outdir: root, naming: "main.mjs", target: "node", external: ["@lydell/node-pty", "jsonc-parser", "bun"],
     define: { DEEPAGENT_CODE_VERSION: '"2.0.3"', DEEPAGENT_CODE_CHANNEL: '"dev"' }, files: { "deepagent-code-web-ui.gen.ts": "" } })
