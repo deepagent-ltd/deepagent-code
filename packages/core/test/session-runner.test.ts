@@ -1119,7 +1119,8 @@ governed.live("retains unknown recovery after interrupting builtin bash after it
     const running = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
     const request = yield* Deferred.await(asked)
     yield* permissions.reply({ requestID: request.id, reply: "once" })
-    while (!(yield* Effect.promise(() => Bun.file(marker).exists()))) yield* Effect.sleep("10 millis")
+    while (!(yield* Effect.promise(async () => await Bun.file(marker).exists() && await Bun.file(marker).text() === "started")))
+      yield* Effect.sleep("10 millis")
     expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("started")
     yield* session.interrupt(sessionID)
     expect((yield* Fiber.join(running))._tag).toBe("Failure")
@@ -2166,7 +2167,7 @@ describe("SessionRunnerLLM", () => {
       expect(settleHookInputs[0]?.sessionID).toBe(sessionID)
       // The workspace path is the runner's Location project root (informational; the deepagent-code
       // admission derives its authoritative workspacePath from the canonical Session row).
-      expect(settleHookInputs[0]?.workspacePath).toBe(path.parse(process.cwd()).root)
+      expect(settleHookInputs[0]?.workspacePath).toBe(path.parse(testDirectory).root)
       expect(settleHookInputs[0]?.activityId).toMatch(/^activity_/)
     }),
   )

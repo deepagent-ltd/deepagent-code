@@ -139,9 +139,10 @@ describe("SessionProjector wire egress (W4-6)", () => {
     Effect.gen(function* () {
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
+      // Stored absolute paths keep their spelling; relative subpaths derive a host-resolved root.
       for (const [sessionID, directory, subpath, root] of [
         ["ses_wire_worktree_root", "/project/worktrees/child", "", "/project/worktrees/child"],
-        ["ses_wire_nested_root", "/project/src/nested", "src/nested", "/project"],
+        ["ses_wire_nested_root", "/project/src/nested", "src/nested", path.resolve("/project")],
         ["ses_wire_legacy_root", "/project/src", "/project", "/project"],
         ["ses_wire_foreign_root", "/project/src", "/foreign", "/project/src"],
         ["ses_wire_unknown_parent", "/project/sibling", "../sibling", "/project/sibling"],
@@ -172,7 +173,7 @@ describe("SessionProjector wire egress (W4-6)", () => {
           .pipe(Effect.orDie)
         expect((wire?.data as { path?: { cwd: string; root: string } } | undefined)?.path).toEqual({
           cwd: directory,
-          root: path.resolve(root),
+          root,
         })
       }
     }),
