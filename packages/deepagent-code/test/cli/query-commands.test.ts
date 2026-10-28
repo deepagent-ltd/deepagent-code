@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { stat } from "node:fs/promises"
+import path from "node:path"
 import { cliIt } from "../lib/cli-process"
 
 // PARITY-004 long-tail: the unified "query command" template — instance SDK
@@ -24,9 +26,41 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
 
   cliIt.concurrent(
     "panel status resolves the global default for any session",
-    ({ deepagentCode }) =>
+    ({ home, deepagentCode }) =>
       Effect.gen(function* () {
+        const started = Date.now()
         const json = yield* deepagentCode.spawn(["panel", "status", "ses_parity000003", "--format", "json"])
+        const startup = yield* Effect.tryPromise(async () => {
+          const log = path.join(home, ".deepagent", "code", "log", "dev.log")
+          const file = Bun.file(log)
+          const metadata = await stat(log)
+          const text = await file.slice(0, 131072).text()
+            + (metadata.size > 131072 ? await file.slice(-131072).text() : "")
+          return {
+            hasLog: true,
+            bytes: metadata.size,
+            createdMs: Math.round(metadata.birthtimeMs - started),
+            modifiedMs: Math.round(metadata.mtimeMs - started),
+            truncated: metadata.size > 262144,
+            stages: ([
+              ["cli_registered", /service=default .*process_role=main/],
+              ["project_from_directory", /service=project .*fromDirectory/],
+              ["config_observed", /service=config /],
+              ["server_startup", /service=server .*startup/],
+              ["fatal", /service=default .*fatal/],
+              ["cleanup_budget_exceeded", /process resource cleanup exceeded shutdown budget/],
+            ] as const).flatMap(([stage, pattern]) => {
+              const line = text.split("\n").find((line) => pattern.test(line))
+              return line ? [{ stage, at: line.match(/\d{4}-\d{2}-\d{2}T[\d:]+/)?.[0] ?? "unknown" }] : []
+            }),
+          }
+        }).pipe(Effect.orElseSucceed(() => ({ hasLog: false, state: "unknown" })))
+        console.error("CLI_PANEL_STARTUP", JSON.stringify({
+          durationMs: json.durationMs,
+          termination: json.termination,
+          exitCode: json.exitCode,
+          startup,
+        }))
         deepagentCode.expectExit(json, 0, "panel status --format json")
         // W3.9 stdout hygiene: whole stdout parses as one JSON payload with no log line pollution.
         const parsed = deepagentCode.expectJsonStdout(json, "panel status --format json") as {
