@@ -115,6 +115,9 @@ const configure = (directory: string, beforeEnable: Effect.Effect<unknown, unkno
 })
 const terminalAt = (ordinal: number, requireReceipt = true) => Effect.gen(function* () {
   const db = (yield* Database.Service).db
+  const source = yield* db.select({ directory: SessionTable.directory }).from(SessionTable)
+    .where(sql`${SessionTable.id}=${sourceID}`).get()
+  if (!source) throw new Error("Missing original event source Session")
   const now = Date.now()
   yield* db.run(sql`INSERT INTO session_input(id,session_id,prompt,delivery,admitted_seq,promoted_seq,time_created)
     VALUES('msg_source_input',${sourceID},'{"text":"ordinary source"}','queue',1,2,${now})`)
@@ -127,7 +130,7 @@ const terminalAt = (ordinal: number, requireReceipt = true) => Effect.gen(functi
   yield* db.run(sql`INSERT INTO session_context_selection(selection_id,session_id,activity_id,revision,trigger_input_id,location_key,
     query_fingerprint,authorization_fingerprint,authorization_epoch,execution_fingerprint,selected_source_fingerprint,
     observed_location_mutation_epoch,next_revalidation_at,graph_revisions,graph_statuses,selected_refs,projection,projection_hash,token_count,
-    artifact_write_status,inline_audit,security_namespace_id,project_scope_key,released_knowledge_binding_state,released_knowledge_exact_refs,released_knowledge_exact_refs_fingerprint,created_at) SELECT 'selection_source',${sourceID},'activity_source',1,'msg_source_input',directory,
+    artifact_write_status,inline_audit,security_namespace_id,project_scope_key,released_knowledge_binding_state,released_knowledge_exact_refs,released_knowledge_exact_refs_fingerprint,created_at) SELECT 'selection_source',${sourceID},'activity_source',1,'msg_source_input',${source.directory},
       'query','auth',1,'execution','source',0,${now+10000},'{}','{}','[]','{}',${"e".repeat(64)},2,'degraded_unavailable','{}','task-namespace','task-project','unavailable','[]',${Hash.sha256("[]")},${now}
       FROM session WHERE id=${sourceID}`)
   yield* db.run("INSERT INTO session_provider_owner_lease(owner_token,registered_at,heartbeat_at,lease_expires_at) VALUES('source_owner',CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)+600000)")
