@@ -76,14 +76,29 @@ function withRuntime(dbPath: string, program: Effect.Effect<any, any, any>): Pro
   return Effect.runPromise(program.pipe(Effect.provide(runtime as any)) as any)
 }
 
+function fixtureProgress(test: string) {
+  const started = performance.now()
+  return (stage: string) => {
+    // A Windows timeout must identify whether fixture setup, the writer, or scope cleanup was last active.
+    console.info(
+      "[import-session-fixture]",
+      JSON.stringify({ test, stage, elapsedMs: Math.round(performance.now() - started) }),
+    )
+  }
+}
+
 describe("import writer/session (integration)", () => {
   it("rolls back prior history, event/outbox replacement and receipt when a replay batch fails", async () => {
     const dbPath = join(tmpdir(), `imp-atomic-${crypto.randomUUID()}.sqlite`)
+    const progress = fixtureProgress("rollback-replay")
+    progress("runtime-open")
     await withRuntime(
       dbPath,
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
+        progress("runtime-ready")
         const original = yield* importSession(sample())
+        progress("initial-imported")
         const before = yield* db
           .select()
           .from(EventTable)
@@ -95,10 +110,12 @@ describe("import writer/session (integration)", () => {
             "CREATE TRIGGER import_fail_replay BEFORE INSERT ON event WHEN NEW.seq = 1 BEGIN SELECT RAISE(ABORT, 'fixture batch failure'); END",
           )
           .pipe(Effect.orDie)
+        progress("rollback-import-start")
         const failed = yield* importSession(
           { ...sample(), title: "must roll back" },
           { jobID: "fixture-atomic", batchID: "0", sourceDigest: "a".repeat(64) },
         ).pipe(Effect.exit)
+        progress("rollback-import-settled")
         expect(Exit.isFailure(failed)).toBe(true)
         expect(
           yield* db
@@ -118,10 +135,12 @@ describe("import writer/session (integration)", () => {
         ).toBe(sample().title)
         expect(yield* db.select().from(ImportBatchReceiptTable).all().pipe(Effect.orDie)).toEqual([])
         yield* db.run("DROP TRIGGER import_fail_replay").pipe(Effect.orDie)
+        progress("replacement-import-start")
         const completed = yield* importSession(
           { ...sample(), title: "committed replacement" },
           { jobID: "fixture-atomic", batchID: "0", sourceDigest: "a".repeat(64) },
         )
+        progress("replacement-imported")
         expect("kind" in completed).toBe(false)
         if ("kind" in completed) throw new Error("Session import returned a file receipt")
         expect(completed.reimport).toBe(true)
@@ -134,7 +153,9 @@ describe("import writer/session (integration)", () => {
           .where(eq(EventTable.aggregate_id, original.targetId))
           .all()
           .pipe(Effect.orDie)
+        progress("receipt-replay-start")
         yield* importSession(sample(), { jobID: "fixture-atomic", batchID: "0", sourceDigest: "a".repeat(64) })
+        progress("receipt-replayed")
         expect(
           yield* db
             .select()
@@ -143,17 +164,23 @@ describe("import writer/session (integration)", () => {
             .all()
             .pipe(Effect.orDie),
         ).toEqual(stable)
-      }),
-    )
+        progress("assertions-complete")
+      }).pipe(Effect.onExit((exit) => Effect.sync(() => progress(`program-${exit._tag.toLowerCase()}`)))),
+    ).finally(() => progress("runtime-settled"))
   })
   it("a paused old batch cannot write after an explicit cold stop was confirmed", async () => {
     const root = join(tmpdir(), `imp-late-${crypto.randomUUID()}`)
+    const progress = fixtureProgress("cold-stop")
+    progress("target-runtime-open")
     await withRuntime(
       `${root}-target.sqlite`,
       Effect.gen(function* () {
         const target = (yield* Database.Service).db
+        progress("target-runtime-ready")
+        progress("control-runtime-open")
         yield* Effect.gen(function* () {
           const control = yield* Database.Service
+          progress("control-runtime-ready")
           const run = <A, E>(effect: Effect.Effect<A, E, Database.Service>) =>
             Effect.runPromise(effect.pipe(Effect.provideService(Database.Service, control)))
           const admitted = yield* ImportJob.create({
@@ -176,6 +203,7 @@ describe("import writer/session (integration)", () => {
             revision: running.revision,
             batchID: "0",
           })
+          progress("batch-admitted")
           const paused = yield* Deferred.make<void>()
           const resume = yield* Deferred.make<void>()
           // Pause the admitted producer before calling the actual destination writer.
@@ -195,21 +223,29 @@ describe("import writer/session (integration)", () => {
             }).pipe(Effect.provideService(Database.Service, { db: target }), Effect.exit)
           }).pipe(Effect.forkChild)
           yield* Deferred.await(paused)
+          progress("producer-paused")
           yield* control.db.run("UPDATE import_job SET owner_lease_expires_at = 1").pipe(Effect.orDie)
           const cancelled = yield* ImportJob.requestCancel("late-job")
+          progress("cancel-requested")
+          progress("destination-fence-start")
           const stopped = yield* ImportJob.withDestinationFence(`${root}-target.sqlite`, () =>
             run(ImportJob.confirmStopped({ id: "late-job", revision: cancelled.revision, count: 0, known: true })),
           )
+          progress("destination-fence-settled")
           expect(stopped?.state).toBe("cancelled")
           expect(stopped?.stop_confirmed_at).toBeGreaterThan(0)
           yield* Deferred.succeed(resume, undefined)
+          progress("producer-resumed")
           expect(Exit.isFailure(yield* Fiber.join(old))).toBe(true)
+          progress("producer-denied")
           expect(yield* target.select().from(SessionTable).all().pipe(Effect.orDie)).toEqual([])
           expect(yield* target.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
           expect(yield* target.select().from(ImportBatchReceiptTable).all().pipe(Effect.orDie)).toEqual([])
+          progress("assertions-complete")
         }).pipe(Effect.provide(Layer.fresh(Database.layerFromPath(`${root}-control.sqlite`))))
-      }),
-    )
+        progress("control-runtime-closed")
+      }).pipe(Effect.onExit((exit) => Effect.sync(() => progress(`program-${exit._tag.toLowerCase()}`)))),
+    ).finally(() => progress("target-runtime-settled"))
   })
 
   it("preserves a real native V2 Session and admit-only input at an imported stable ID", async () => {
