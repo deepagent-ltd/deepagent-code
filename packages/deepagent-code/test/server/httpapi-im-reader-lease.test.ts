@@ -225,6 +225,19 @@ it.live("explicit selected group refresh uses the original authenticated inspect
     sdk.publish(1, "uuid-boba", "UNCHANGED_ORIGINAL_BODY")
     yield* waitBody(directory, original.id, "UNCHANGED_ORIGINAL_BODY")
     const db = sdk.observed.database!.db
+    const reader = sdk.observed.lease.get(directory)!.reader
+    // HTTP visibility precedes the original scan checkpoint. Finish that work,
+    // then hold the next genuine changes response before it can alter this baseline.
+    yield* pollWithTimeout(reader.sync.pipe(
+      Effect.andThen(db.select().from(IMKernelReaderScopeTable).all()),
+      Effect.map((rows) => rows.length === 1 && rows.every((row) =>
+        row.phase === "idle" && row.completed_after === String(sdk.observed.cursor) &&
+        row.window_after === null && row.window_upper === null) ? true : undefined),
+    ), "Original reader did not finish its published-message checkpoint", "8 seconds")
+    const changes = sdk.stallChanges()
+    const syncing = yield* Effect.forkChild(reader.sync)
+    yield* Effect.addFinalizer(() => Effect.sync(changes.release))
+    yield* Effect.promise(() => withTimeout(changes.started, 5000, "Original changes response did not reach its refresh barrier"))
     const before = yield* db.all(sql`SELECT reader_key,scope_key,completed_after,window_after,window_upper FROM im_kernel_reader_scope`)
     const messages = yield* db.all(sql`SELECT * FROM im_messages`)
     const memberRows = yield* db.all(sql`SELECT * FROM im_members`)
@@ -258,6 +271,8 @@ it.live("explicit selected group refresh uses the original authenticated inspect
     expect(sdk.observed.sends).toBe(0)
     expect(sdk.observed.marks).toBe(0)
     expect(sdk.observed.platformMutations).toBe(0)
+    changes.release()
+    yield* Fiber.join(syncing)
   }), metadata)
 }))
 
