@@ -9,13 +9,6 @@ import {
 
 test("actual Chromium references reject stale nodes and focus theft without exposing passwords", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-inputs-")))
-  const diagnosticAB =
-    process.env.DAC_BROWSER_INPUT_FIXTURE_AB_DIAGNOSTIC === "1" ||
-    (process.platform === "linux" &&
-      process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
-      process.env.DAC_TEST_FILE === "src/main/managed-browser-actions.test.ts" &&
-      process.env.DAC_TEST_NAME ===
-        "actual Chromium references reject stale nodes and focus theft without exposing passwords")
   await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
   await Bun.write(
     path.join(root, "main.ts"),
@@ -26,53 +19,34 @@ import { writeFile } from "node:fs/promises"
 import { createManagedBrowserActions } from ${JSON.stringify(path.join(import.meta.dir, "managed-browser-actions.ts"))}
 app.setPath("userData", ${JSON.stringify(path.join(root, "profile"))})
 app.on("window-all-closed",()=>{})
-const originalMarkup='<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'
-const server=createServer((_req,res)=>res.end(originalMarkup))
+const server=createServer((_req,res)=>res.end('<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
-const originalSequence=[]
-const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
-const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),windowFocused:BrowserWindow.fromWebContents(contents)?.isFocused(),contentsFocused:contents.isFocused(),state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  const window=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
  const contents=window.webContents
+ // Linux can acknowledge CDP input before the first rendered frame accepts events.
+ const ready=process.platform==='linux'?new Promise(resolve=>window.once('ready-to-show',()=>resolve(undefined))):undefined
  try {
   await contents.loadURL('http://127.0.0.1:'+server.address().port)
-  // Match the production dynamic-action visibility/focus precondition on Xvfb.
-  if(process.platform==='linux'){
-   const nativeFocus=(stage)=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original-native-focus',stage,windowVisible:window.isVisible(),windowFocused:window.isFocused(),contentsFocused:contents.isFocused()}))
-   nativeFocus('before')
-   // DOM document.hasFocus() alone does not establish the OS top-level input focus.
+  if(ready){
    await new Promise((resolve,reject)=>{
-    const dispose=()=>{clearTimeout(timer);window.removeListener('focus',ready);contents.removeListener('focus',ready)}
-    const ready=()=>{if(!window.isFocused()||!contents.isFocused())return;dispose();resolve(undefined)}
-    const timer=setTimeout(()=>{dispose();nativeFocus('timeout');reject(new Error('MANAGED_BROWSER_INPUT_FIXTURE_NATIVE_FOCUS_TIMEOUT'))},1000)
-    window.on('focus',ready)
-    contents.on('focus',ready)
-    window.show()
-    window.focus()
-    contents.focus()
-    ready()
+    const timer=setTimeout(()=>reject(new Error('MANAGED_BROWSER_INPUT_FIXTURE_RENDER_TIMEOUT')),5000)
+    ready.then(()=>{clearTimeout(timer);resolve(undefined)})
    })
-   const documentFocus=await contents.executeJavaScript('({visible:document.visibilityState==="visible",focused:document.hasFocus()})')
-   console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original-native-focus',stage:'ready',windowVisible:window.isVisible(),windowFocused:window.isFocused(),contentsFocused:contents.isFocused(),documentFocus}))
-   if(!window.isFocused()||!contents.isFocused()||!documentFocus.visible||!documentFocus.focused)throw new Error('MANAGED_BROWSER_INPUT_FIXTURE_NOT_READY')
+   window.show()
+   window.focus()
+   contents.focus()
   }
   contents.debugger.attach('1.3')
   await contents.debugger.sendCommand('Page.enable')
   await contents.debugger.sendCommand('Accessibility.enable')
-  const helper=createManagedBrowserActions({send:async(method,params)=>{
-   if(!result.filled)originalSequence.push(method)
-   const response=await contents.debugger.sendCommand(method,params)
-   if(process.platform==='linux'&&['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(contents,'entry','original',method,params)
-   return response
-  },current:async()=>{},generation:()=>1,fail:(code)=>{throw new Error(code)},dispatched:()=>{result.dispatch++}})
+  const helper=createManagedBrowserActions({send:(method,params)=>contents.debugger.sendCommand(method,params),current:async()=>{},generation:()=>1,fail:(code)=>{throw new Error(code)},dispatched:()=>{result.dispatch++}})
   const snapshot=()=>helper.snapshot({type:'snapshot',tabID:'test',generation:1})
   const target=(page,name)=>({tabID:'test',generation:1,frameID:page.frameID,observationRevision:page.observationRevision,ref:page.refs.find(ref=>ref.name===name).ref})
   const page=await snapshot()
   result.passwordVisible=JSON.stringify(page).includes('NEVER_REVEAL_PASSWORD')
-  if(process.platform==='linux')await inputTrace(contents,'entry','original','fill-before')
   await helper.execute({type:'fill',...target(page,'Entry'),text:'中文一次'})
   result.filled=await contents.executeJavaScript('document.getElementById("entry").value')
   const fresh=await snapshot()
@@ -93,76 +67,6 @@ async function main(){
   try{await helper.execute({type:'click',...target(hovered,'Go')})}catch(e){result.errors.push(e.message)}
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
-  if(${diagnosticAB}){
-   // The original oracle stays fixed. Only a real first-render event gates one HTTP path.
-   console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original',stage:'method-sequence',methods:originalSequence}))
-   for(const variant of [
-    {name:'http-baseline',transport:'http',waitReady:false},
-    {name:'http-ready-to-show',transport:'http',waitReady:true},
-    {name:'data-positive-control',transport:'data',waitReady:false},
-   ]){
-    const owner=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
-    const probe=owner.webContents
-    const created=performance.now()
-    const rendered={fired:false,elapsedMs:null}
-    const ready=new Promise(resolve=>owner.once('ready-to-show',()=>{
-     rendered.fired=true
-     rendered.elapsedMs=Number((performance.now()-created).toFixed(3))
-     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'ready-to-show-event',...rendered,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
-     resolve(undefined)
-    }))
-    const phase={stage:'page-load'}
-    const methods=[]
-    const send=async(method,params)=>{
-     phase.stage=method
-     methods.push(method)
-     const response=await probe.debugger.sendCommand(method,params)
-     if(['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(probe,'entry',variant.name,method,params)
-     return response
-    }
-    try{
-     await probe.loadURL(variant.transport==='http'?'http://127.0.0.1:'+server.address().port:'data:text/html,'+encodeURIComponent(originalMarkup))
-     if(variant.waitReady){
-      phase.stage='ready-to-show-wait'
-      await new Promise((resolve,reject)=>{
-       const timer=setTimeout(()=>reject(new Error('DIAGNOSTIC_READY_TO_SHOW_TIMEOUT')),5000)
-       ready.then(()=>{clearTimeout(timer);resolve(undefined)})
-      })
-     }
-     if(process.platform==='linux'){owner.show();owner.focus();probe.focus()}
-     phase.stage='debugger-attach'
-     probe.debugger.attach('1.3')
-     await send('Page.enable')
-     const document=await send('DOM.getDocument')
-     const entry=await send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#entry'})
-     if(!entry.nodeId)throw new Error('DIAGNOSTIC_ENTRY_MISSING')
-     await send('DOM.focus',{nodeId:entry.nodeId})
-     await inputTrace(probe,'entry',variant.name,'ready')
-     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'first-render-before-input',...rendered}))
-     const select={key:'a',windowsVirtualKeyCode:65,modifiers:process.platform==='darwin'?4:2}
-     await send('Input.dispatchKeyEvent',{type:'keyDown',...select,commands:['selectAll']})
-     await send('Input.dispatchKeyEvent',{type:'keyUp',...select})
-     const erase={key:'Backspace',windowsVirtualKeyCode:8,modifiers:0}
-     await send('Input.dispatchKeyEvent',{type:'keyDown',...erase})
-     await send('Input.dispatchKeyEvent',{type:'keyUp',...erase})
-     await send('Input.insertText',{text:'中文一次'})
-     await inputTrace(probe,'entry',variant.name,'terminal')
-     if(variant.waitReady){
-      phase.stage='capture-after-input'
-      const image=await probe.capturePage(undefined,{stayHidden:true})
-      const size=image.getSize()
-      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'capture-after-input-ack',nonempty:!image.isEmpty()&&size.width>0&&size.height>0,width:size.width,height:size.height,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
-     }
-    }catch(error){
-     // Diagnostic failures never replace the original business assertions.
-     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',during:phase.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
-    }finally{
-     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'method-sequence',methods}))
-     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'first-render-final',...rendered}))
-     owner.destroy()
-    }
-   }
-  }
   await writeFile(${JSON.stringify(path.join(root, "result.json"))},JSON.stringify(result))
  }finally{window.destroy();server.closeAllConnections();server.close()}
 }
@@ -197,8 +101,6 @@ main().then(()=>app.exit(0)).catch(error=>{console.error(error);app.exit(1)})
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + stderr)
   console.log("MANAGED_BROWSER_INPUT_EVIDENCE", root)
-  if (process.platform === "linux" || diagnosticAB)
-    stdout.split("\n").filter((line) => line.startsWith("LINUX_BROWSER_INPUT_TRACE ")).forEach((line) => console.log(line))
   expect({ code, error: code ? stdout + stderr : null }).toEqual({ code: 0, error: null })
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect(result.passwordVisible).toBe(false)
