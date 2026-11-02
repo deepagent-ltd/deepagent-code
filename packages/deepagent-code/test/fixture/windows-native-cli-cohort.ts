@@ -184,33 +184,42 @@ export async function build(input: {
       executable: signed.payload.executable, signerHash: keys.signerHash, preloaderReceiptHash: preloader.receiptHash,
       toolchain, productionOwnerMaterial: false }))
     const state = { disposed: false, counter: 0, stops: new Set<() => Promise<void>>(), runs: new Set<Promise<unknown>>() }
+    const invocation = async (input: { args?: string[]; env?: Record<string, string>; inheritEnvironment?: boolean; cwd?: string } = {}) => {
+      assert(!state.disposed, "Native CLI cohort is disposed")
+      assert((input.args ?? []).length <= 64 && (input.args ?? []).every((arg) => arg.length <= 8192 && !arg.includes("\0")))
+      const env: Record<string, string | undefined> = environment(root, toolchain.rustupHome, input.inheritEnvironment !== false)
+      for (const [name, value] of Object.entries(input.env ?? {})) {
+        assert(/^[a-zA-Z_][a-zA-Z0-9_()]*$/.test(name) && !value.includes("\0"))
+        const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase()) ?? name.toUpperCase()
+        env[key] = value
+      }
+      for (const name of ["DEEPAGENT_CODE_V2_OWNER_CAMPAIGN", "DEEPAGENT_CODE_V2_OWNER_PUBLIC_KEY"])
+        assert(!env[name], "Formal owner material is not accepted by this test cohort")
+      for (const name of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
+        "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "CARGO_HOME",
+        "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "DEEPAGENT_CODE_TEST_HOME", "DEEPAGENT_CODE_HOME",
+        "DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR"]) {
+        if (!env[name]) continue
+        await requireOwnedDirectory(root, env[name]!)
+      }
+      assert.equal(env.RUSTUP_HOME, toolchain.rustupHome)
+      if (env.DEEPAGENT_CODE_DB && env.DEEPAGENT_CODE_DB !== ":memory:")
+        await requireOwnedDirectory(root, path.dirname(env.DEEPAGENT_CODE_DB))
+      if (input.cwd) await requireOwnedDirectory(root, input.cwd)
+      return { cmd: [executable, ...(input.args ?? [])], cwd: input.cwd ?? root,
+        env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)) }
+    }
     return { root, executable, components, payload: signed.payload, manifests,
+      invocation,
       async run(input: { args?: string[]; env?: Record<string, string>; stdin?: string | Uint8Array; milliseconds?: number;
         inheritEnvironment?: boolean } = {}) {
         assert(!state.disposed, "Native CLI cohort is disposed")
         assert((input.args ?? []).length <= 64 && (input.args ?? []).every((arg) => arg.length <= 8192 && !arg.includes("\0")))
         const milliseconds = input.milliseconds ?? 60_000
         assert(Number.isSafeInteger(milliseconds) && milliseconds > 0 && milliseconds <= runtimeLimit)
-        const env: Record<string, string | undefined> = environment(root, toolchain.rustupHome, input.inheritEnvironment !== false)
-        for (const [name, value] of Object.entries(input.env ?? {})) {
-          assert(/^[a-zA-Z_][a-zA-Z0-9_()]*$/.test(name) && !value.includes("\0"))
-          const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase()) ?? name.toUpperCase()
-          env[key] = value
-        }
-        for (const name of ["DEEPAGENT_CODE_V2_OWNER_CAMPAIGN", "DEEPAGENT_CODE_V2_OWNER_PUBLIC_KEY"])
-          assert(!env[name], "Formal owner material is not accepted by this test cohort")
-        for (const name of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
-          "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "CARGO_HOME",
-          "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "DEEPAGENT_CODE_TEST_HOME", "DEEPAGENT_CODE_HOME",
-          "DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR"]) {
-          if (!env[name]) continue
-          await requireOwnedDirectory(root, env[name]!)
-        }
-        assert.equal(env.RUSTUP_HOME, toolchain.rustupHome)
-        if (env.DEEPAGENT_CODE_DB && env.DEEPAGENT_CODE_DB !== ":memory:")
-          await requireOwnedDirectory(root, path.dirname(env.DEEPAGENT_CODE_DB))
+        const command = await invocation(input)
         assert(input.stdin === undefined || Buffer.byteLength(input.stdin) <= 1_048_576)
-        const run = execute([executable, ...(input.args ?? [])], root, env, `runtime-${state.counter++}`,
+        const run = execute(command.cmd, command.cwd, command.env, `runtime-${state.counter++}`,
           milliseconds, input.stdin, state.stops)
         state.runs.add(run)
         try { return await run } finally { state.runs.delete(run) }

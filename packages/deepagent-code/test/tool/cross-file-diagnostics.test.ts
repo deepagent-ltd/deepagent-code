@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
+import path from "path"
+import { pathToFileURL } from "url"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { crossFileCallerDiagnostics } from "../../src/tool/cross-file-diagnostics"
 import type { LSP } from "@/lsp/lsp"
@@ -7,8 +9,9 @@ import type { LSP } from "@/lsp/lsp"
 // L4 (S1-v3.4) §1 acceptance (a): after a change, diagnostics in *referencing* files are
 // surfaced (bounded). Gated to high+ — a NO-OP in lightweight (general/direct) modes.
 
-const CHANGED = "/repo/src/changed.ts"
-const CALLER = "/repo/src/caller.ts"
+const ROOT = path.resolve("/repo")
+const CHANGED = path.join(ROOT, "src", "changed.ts")
+const CALLER = path.join(ROOT, "src", "caller.ts")
 
 // A mock LSP that says: changed.ts has one top-level symbol, referenced from caller.ts,
 // and caller.ts now has an error diagnostic. Everything else is empty.
@@ -16,7 +19,7 @@ const mockLsp = (overrides: Partial<LSP.Interface> = {}): LSP.Interface =>
   ({
     documentSymbol: () =>
       Effect.succeed([{ name: "doStuff", kind: 12, selectionRange: { start: { line: 0, character: 16 } } }] as any),
-    references: () => Effect.succeed([{ uri: `file://${CALLER}`, range: { start: { line: 4, character: 2 } } }] as any),
+    references: () => Effect.succeed([{ uri: pathToFileURL(CALLER).href, range: { start: { line: 4, character: 2 } } }] as any),
     touchFile: () => Effect.void,
     diagnostics: () =>
       Effect.succeed({
@@ -34,10 +37,10 @@ const mockLsp = (overrides: Partial<LSP.Interface> = {}): LSP.Interface =>
 describe("L4 cross-file caller diagnostics", () => {
   test("high mode: surfaces error diagnostics in a referencing file", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
-    const out = await Effect.runPromise(crossFileCallerDiagnostics(mockLsp(), CHANGED, "/repo"))
+    const out = await Effect.runPromise(crossFileCallerDiagnostics(mockLsp(), CHANGED, ROOT))
     expect(out).toContain("referencing file")
     expect(out).toContain("arg count")
-    expect(out).toContain("src/caller.ts")
+    expect(out).toContain(path.join("src", "caller.ts"))
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -50,7 +53,7 @@ describe("L4 cross-file caller diagnostics", () => {
         return Effect.succeed([] as any)
       },
     })
-    const out = await Effect.runPromise(crossFileCallerDiagnostics(spy, CHANGED, "/repo"))
+    const out = await Effect.runPromise(crossFileCallerDiagnostics(spy, CHANGED, ROOT))
     expect(out).toBe("")
     expect(called).toBe(false)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
@@ -61,9 +64,9 @@ describe("L4 cross-file caller diagnostics", () => {
     // References point back to the changed file only → no other files → empty.
     const selfOnly = mockLsp({
       references: () =>
-        Effect.succeed([{ uri: `file://${CHANGED}`, range: { start: { line: 0, character: 0 } } }] as any),
+        Effect.succeed([{ uri: pathToFileURL(CHANGED).href, range: { start: { line: 0, character: 0 } } }] as any),
     })
-    const out = await Effect.runPromise(crossFileCallerDiagnostics(selfOnly, CHANGED, "/repo"))
+    const out = await Effect.runPromise(crossFileCallerDiagnostics(selfOnly, CHANGED, ROOT))
     expect(out).toBe("")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })

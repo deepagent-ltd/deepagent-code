@@ -22,8 +22,10 @@ const taskScope = sql`r.execution_runtime='v2' AND p.v2_authority=1 AND p.worksp
   AND (r.state IN ('completed','failed','error','closed','interrupted','cancelled','recovery_required') OR r.control_state='close_requested')`
 const taskFrom = sql`task_run r JOIN task_admission a ON a.run_id=r.run_id
   JOIN session p ON p.id=r.parent_session_id LEFT JOIN session c ON c.id=r.child_session_id`
+// Goal control binds platform paths; Session columns encode Windows separators as '/'.
 const goalScope = sql`g.is_current=1 AND g.driver_mode='event' AND p.v2_authority=1 AND p.workspace_id IS NULL
-  AND g.workspace_id IS NULL AND g.project_id=p.project_id AND g.directory=p.directory
+  AND g.workspace_id IS NULL AND g.project_id=p.project_id
+  AND ${process.platform === "win32" ? sql`replace(g.directory, char(92), '/')` : sql`g.directory`}=p.directory
   AND p.id NOT LIKE ${`${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`} AND length(g.goal_id) BETWEEN 1 AND 95
   AND (g.requested_phase IN ('paused','stopped','done','needs_human','rolled_back')
     OR g.preparation='recovery_required' OR g.recovery_reason IS NOT NULL OR g.pending_rebase_id IS NOT NULL

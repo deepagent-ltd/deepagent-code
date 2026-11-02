@@ -448,6 +448,19 @@ describe("util.effect-flock", () => {
         const disposeMs = Date.now() - start
         const exit = yield* Fiber.await(fiber)
 
+        console.error("EFFECT_FLOCK_INTERRUPT", JSON.stringify({
+          disposeMs,
+          exit: exit._tag,
+          interruptors: Exit.isFailure(exit) ? Cause.interruptors(exit.cause).size : 0,
+          reasons: Exit.isFailure(exit) ? exit.cause.reasons.map((reason) => {
+            const error = reason._tag === "Fail" ? reason.error : reason._tag === "Die" ? reason.defect : undefined
+            return {
+              kind: reason._tag,
+              tag: error && typeof error === "object" && "_tag" in error ? String(error._tag) : undefined,
+              name: error instanceof Error ? error.name : undefined,
+            }
+          }) : [],
+        }))
         expect(disposeMs).toBeLessThan(5_000)
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
         expect(yield* Effect.promise(() => exists(lockDir))).toBe(true)

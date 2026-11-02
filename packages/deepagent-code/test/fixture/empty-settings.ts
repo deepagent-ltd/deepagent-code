@@ -29,18 +29,33 @@ export const layer = Layer.effectContext(
 async function requireAbsent() {
   const home = process.env.DEEPAGENT_CODE_TEST_HOME
   if (!home || !path.isAbsolute(home)) throw new Error("Empty settings fixture requires an isolated test home")
-  const directory = await fs.realpath(Global.Path.config)
-  const relative = path.relative(await fs.realpath(home), directory)
+  const root = await fs.realpath(home)
+  const relative = path.relative(home, Global.Path.config)
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
     throw new Error("Empty settings fixture is outside its isolated config directory")
-  for (const name of names) {
-    const exists = await fs.lstat(path.join(directory, name)).then(
-      () => true,
-      (error: unknown) => {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return false
-        throw error
-      },
-    )
-    if (exists) throw new Error(`Empty settings fixture found private state: ${name}`)
+  const directory = { path: root }
+  // A repointed test home can lack the entire config directory. Only an absent
+  // component below the verified home is empty; dangling links and other IO fail.
+  for (const name of relative.split(path.sep)) {
+    const next = path.join(directory.path, name)
+    if (!await exists(next)) return
+    directory.path = await fs.realpath(next)
+    const current = path.relative(root, directory.path)
+    if (current.startsWith("..") || path.isAbsolute(current))
+      throw new Error("Empty settings fixture is outside its isolated config directory")
   }
+  if (directory.path === root) throw new Error("Empty settings fixture is outside its isolated config directory")
+  for (const name of names) {
+    if (await exists(path.join(directory.path, name))) throw new Error(`Empty settings fixture found private state: ${name}`)
+  }
+}
+
+function exists(file: string) {
+  return fs.lstat(file).then(
+    () => true,
+    (error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return false
+      throw error
+    },
+  )
 }

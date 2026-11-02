@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { PtyID } from "@deepagent-code/core/pty/schema"
 import { Server } from "../../src/server/server"
+import { InstanceRuntime } from "../../src/project/instance-runtime"
 import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import * as Log from "@deepagent-code/core/util/log"
 import { resetDatabase } from "../fixture/db"
@@ -149,7 +150,7 @@ describe("pty HttpApi bridge", () => {
     })
     expect(created.status).toBe(200)
 
-    await disposeAllInstances()
+    await InstanceRuntime.disposeAllInstances()
 
     const list = await app().request(PtyPaths.list, { headers })
     expect(list.status).toBe(200)

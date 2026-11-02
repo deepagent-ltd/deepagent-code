@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
@@ -12,7 +13,7 @@ import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-kn
 import { resolveBrowserLocation } from "../../src/browser/location-binding"
 
 async function run(body: (root: string) => Effect.Effect<void, unknown, LocationIdentity.Service | Database.Service>) {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-location-binding-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-location-binding-")))
   await fs.chmod(root, 0o700)
   const database = Database.layerFromPath(path.join(root, "authority.sqlite"))
   try {

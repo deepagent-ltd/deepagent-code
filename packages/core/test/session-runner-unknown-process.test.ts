@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Effect } from "effect"
+import { Database } from "@deepagent-code/core/database/database"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -6,16 +8,48 @@ import path from "node:path"
 // Reuse the full runner fixture in isolated processes. The external tool and provider are
 // deterministic seams; SessionV2, runner, input promotion, admissions and file DB are real.
 // This is a clean process-reopen oracle, not a SIGKILL during the external side effect.
-test.each([
+const scenarios = [
   { gate: "normal", providerFailed: false },
   { gate: "reminder", providerFailed: false },
   { gate: "normal", providerFailed: true },
   { gate: "reminder", providerFailed: true },
-])(
+]
+const roots = new Map<string, string>()
+
+// This oracle tests durable dispatch/reopen, not empty-schema migration cost. Prepare only
+// the official empty schema; each original child still opens and closes its own real DB.
+beforeAll(async () => {
+  const started = performance.now()
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      for (const scenario of scenarios) {
+        const root = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "runner-unknown-process-")))
+        roots.set(JSON.stringify(scenario), root)
+        yield* Effect.promise(() =>
+          Promise.all(["home", "tmp", "config", "data", "cache", "state", "workspace"].map((name) => mkdir(path.join(root, name)))),
+        )
+        console.error(JSON.stringify({ test: "runner-unknown-schema", phase: "open", ...scenario,
+          elapsedMs: Math.round(performance.now() - started) }))
+        yield* Database.Service.pipe(
+          Effect.provide(Database.layerFromPath(path.join(root, "authority.sqlite"))),
+          Effect.scoped,
+        )
+        console.error(JSON.stringify({ test: "runner-unknown-schema", phase: "closed", ...scenario,
+          elapsedMs: Math.round(performance.now() - started) }))
+      }
+    }).pipe(Effect.timeout("110 seconds")),
+  )
+}, 120_000)
+
+afterAll(async () => {
+  await Promise.all([...roots.values()].map((root) => rm(root, { recursive: true, force: true })))
+})
+
+test.each(scenarios)(
   "unknown tool outcome survives process reopen (%j)",
   async (scenario) => {
-    const root = await mkdtemp(path.join(tmpdir(), "runner-unknown-process-"))
-    await Promise.all(["home", "tmp", "config", "data", "cache", "state", "workspace"].map((name) => mkdir(path.join(root, name))))
+    const root = roots.get(JSON.stringify(scenario))
+    if (!root) throw new Error("Unknown-outcome schema fixture was not prepared")
     const filename = path.join(root, "authority.sqlite")
     try {
       for (const phase of ["dispatch", "recover"]) {
@@ -52,6 +86,9 @@ test.each([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
         ])
+        stderr.split("\n")
+          .filter((line) => line.startsWith('{"test":"runner-unknown-process"'))
+          .forEach((line) => console.error(line))
         expect({ phase, status, output: status === 0 ? "ok" : stdout + stderr }).toEqual({
           phase,
           status: 0,

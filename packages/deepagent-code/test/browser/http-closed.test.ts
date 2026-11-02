@@ -1,12 +1,20 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
+import { createRequire } from "node:module"
 
-test("actual bare Node HTTP refuses native creation without host or configured authentication", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-browser-http-closed-"))
+test(process.platform === "win32"
+  ? "unsealed HTTP assembly refuses browser creation without host or configured authentication"
+  : "actual bare Node HTTP refuses native creation without host or configured authentication", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-http-closed-")))
   await fs.chmod(root, 0o700)
   // Node sidecar externals are shipped by Desktop, including its Node-ABI PTY selector.
-  await fs.symlink(path.resolve(import.meta.dir, "../../../desktop/node_modules"), path.join(root, "node_modules"), "dir")
+  const require = createRequire(await fs.realpath(path.resolve(import.meta.dir, "../../../desktop/package.json")))
+  await fs.mkdir(path.join(root, "node_modules/@lydell"), { recursive: true })
+  await Promise.all(["jsonc-parser", "@lydell/node-pty"].map(async (name) =>
+    fs.symlink(await fs.realpath(path.dirname(require.resolve(`${name}/package.json`))),
+      path.join(root, "node_modules", name), process.platform === "win32" ? "junction" : "dir")))
   const build = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/http-closed.ts")],
     outdir: root, naming: "main.mjs", target: "node", external: ["@lydell/node-pty", "jsonc-parser", "bun"],
     define: { DEEPAGENT_CODE_VERSION: '"2.0.3"', DEEPAGENT_CODE_CHANNEL: '"dev"' }, files: { "deepagent-code-web-ui.gen.ts": "" } })
@@ -20,7 +28,7 @@ test("actual bare Node HTTP refuses native creation without host or configured a
     const child = Bun.spawn([node!, build.outputs[0]!.path], {
       cwd: instance, env: { PATH: process.env.PATH, HOME: path.join(instance, "home"), TMPDIR: path.join(instance, "tmp"),
         XDG_DATA_HOME: path.join(instance, "data"), XDG_CONFIG_HOME: path.join(instance, "config"), XDG_CACHE_HOME: path.join(instance, "cache"), XDG_STATE_HOME: path.join(instance, "state"),
-        DEEPAGENT_CODE_HOME: path.join(instance, "data"), DEEPAGENT_CODE_TEST_HOME: path.join(instance, "home"), DEEPAGENT_CODE_DB: path.join(instance, "authority.sqlite"),
+        DEEPAGENT_CODE_HOME: path.join(instance, "data"), DEEPAGENT_CODE_TEST_HOME: process.platform === "win32" ? instance : path.join(instance, "home"), DEEPAGENT_CODE_DB: path.join(instance, "authority.sqlite"),
         DEEPAGENT_CODE_SERVER_USERNAME: "operator", DEEPAGENT_CODE_SERVER_PASSWORD: mode === "authenticated" ? "private-fixture" : "",
         DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", DEEPAGENT_IM_AGENT_RESPONDER: "off", DAC_BROWSER_TEST_ROOT: instance, NO_COLOR: "1" },
       stdout: "pipe", stderr: "pipe" })
@@ -29,6 +37,11 @@ test("actual bare Node HTTP refuses native creation without host or configured a
     clearTimeout(timeout)
     await Bun.write(path.join(instance, "process.log"), stdout + "\n" + stderr)
     expect({ code, error: code ? stderr : null }).toEqual({ code: 0, error: null })
+    if (process.platform === "win32") expect(await Bun.file(path.join(instance, "safequalification.json")).json()).toEqual({
+      kind: "unsealed-browser-http-refusal-v1", productionServerListen: false,
+      privateSettings: "absent-only-read; publish-and-parent-refused", nativeQualification: "not-provided",
+      sealedWorkQualification: "not-provided", routeGraph: "original-HttpApiApp.createRoutes",
+    })
   }
   console.log("BROWSER_HTTP_CLOSED_EVIDENCE", root)
   const result = await Bun.file(path.join(root, "authenticated/result.json")).json()

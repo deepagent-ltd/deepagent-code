@@ -11,7 +11,7 @@ import { Auth } from "../auth"
 import { Env } from "../env"
 import { applyEdits, modify } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@deepagent-code/core/installation/version"
-import { existsSync, readdirSync, statSync, watch } from "fs"
+import { existsSync, readdirSync, statSync, unwatchFile, watch, watchFile, type Stats } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
@@ -1281,6 +1281,7 @@ export const layer = Layer.effect(
       const semaphore = yield* Semaphore.make(1)
       let closed = false
       const watchers = new Map<string, ReturnType<typeof watch>>()
+      const missing = new Map<string, (current: Stats) => void>()
       const refresh = () => {
         void bridge.promise(
           semaphore
@@ -1295,9 +1296,26 @@ export const layer = Layer.effect(
         ).catch((error) => log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }))
       }
       const attach = (dir: string) => {
-        watchers.get(dir)?.close()
+        const previous = watchers.get(dir)
+        const pending = missing.get(dir)
+        previous?.close()
         watchers.delete(dir)
-        if (!existsSync(dir)) return
+        if (pending) unwatchFile(dir, pending)
+        missing.delete(dir)
+        if (!existsSync(dir)) {
+          // A removed Linux watch can miss a rapid directory recreation. Observe only
+          // directories this subscription previously watched, until they return or stop.
+          if (process.platform === "linux" && (previous || pending)) {
+            const reappeared = (current: Stats) => {
+              if (closed || missing.get(dir) !== reappeared || !current.isDirectory()) return
+              attach(dir)
+              refresh()
+            }
+            missing.set(dir, reappeared)
+            watchFile(dir, { interval: 100, persistent: false }, reappeared)
+          }
+          return
+        }
         const pluginDirectory = pluginDirectories.has(dir)
         const fingerprint = (name: string) => {
           try {
@@ -1357,6 +1375,7 @@ export const layer = Layer.effect(
             refresh()
           }
           const watcher = watch(dir, (_event, filename) => {
+            if (process.platform === "linux" && !closed && !existsSync(dir)) attach(dir)
             const name = filename?.toString() ?? ""
             if (
               closed ||
@@ -1381,6 +1400,8 @@ export const layer = Layer.effect(
         closed = true
         watchers.forEach((watcher) => watcher.close())
         watchers.clear()
+        missing.forEach((listener, dir) => unwatchFile(dir, listener))
+        missing.clear()
       }
     })
 

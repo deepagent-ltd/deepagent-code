@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "path"
+import { pathToFileURL } from "url"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -191,7 +192,7 @@ describe("L2/L3 code_intel tool", () => {
         "workspace/diagnostic": {
           items: [
             {
-              uri: "file:///broken.repro",
+              uri: pathToFileURL(path.resolve("/broken.repro")).href,
               items: [{ range: range(0), severity: 1, message: "boom" }],
             },
           ],

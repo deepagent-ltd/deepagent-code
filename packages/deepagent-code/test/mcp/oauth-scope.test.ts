@@ -552,6 +552,7 @@ if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
         const instance = yield* InstanceRef
         if (!instance) throw new Error("Missing fixture instance")
         const handler = HttpApiApp.webHandler()
+        yield* Effect.addFinalizer(() => Effect.promise(() => handler.dispose()))
         const request = (route: string, body?: object) =>
           Effect.promise(() =>
             handler.handler(
@@ -633,6 +634,7 @@ if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
         const instance = yield* InstanceRef
         if (!instance) throw new Error("Missing fixture instance")
         const handler = HttpApiApp.webHandler()
+        yield* Effect.addFinalizer(() => Effect.promise(() => handler.dispose()))
         const request = (route: string, body?: object) =>
           Effect.promise(() =>
             handler.handler(

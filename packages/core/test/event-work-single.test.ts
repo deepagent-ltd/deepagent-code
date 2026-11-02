@@ -11,6 +11,7 @@ import { EventV2 } from "../src/event"
 import { SessionV2 } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 import { SessionStore } from "../src/session/store"
+import { SessionTable } from "../src/session/sql"
 import { SessionProjector } from "../src/session/projector"
 import { SessionContext } from "../src/context-federation/session-context"
 import { PreparedProviderTurn } from "../src/session/runner/prepared-provider-turn"
@@ -52,7 +53,7 @@ const verifier = Layer.effect(WorkAuthority.Verifier, Effect.gen(function* () {
 // fixtures, never claims of Native/external LLM execution; this module starts no runner/provider.
 async function isolated(body: (f: { run: <A,E>(effect: Effect.Effect<A,E,Services>) => Promise<A>; filename: string; directory: string }) => Promise<void>) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-event-work-single-")))
-  const directory = path.join(root, "project").replaceAll("\\", "/")
+  const directory = path.join(root, "project")
   await fs.mkdir(directory)
   const filename = path.join(root, "authority.sqlite")
   const database = WorkAuthorityFixture.database(filename)
@@ -92,7 +93,7 @@ const configure = (directory: string, beforeEnable: Effect.Effect<unknown, unkno
     toolPolicy: candidate.toolPolicy, childPolicy: "deny_all" as const }
   yield* db.run(sql`INSERT INTO project(id,worktree,sandboxes,time_created,time_updated) VALUES('global',${directory},'[]',1,1)`)
   yield* db.run(sql`INSERT INTO session(id,project_id,slug,directory,title,version,v2_authority,time_created,time_updated)
-    VALUES(${sourceID},'global',${sourceID},${directory},'Ordinary source','2',1,1,1)`)
+    VALUES(${sourceID},'global',${sourceID},${SessionTable.directory.mapToDriverValue(directory)},'Ordinary source','2',1,1,1)`)
   yield* db.run(sql`UPDATE context_location_identity SET location_key=${directory},canonical_root=${directory},observed_project_id='global'`)
   yield* db.run("UPDATE context_project_scope_identity SET observed_project_id='global'")
   const origin = { id: "ordinary-terminal", targetID: base.id, source: "ordinary_session_activity_terminal_v1" as const, sourceSessionID: sourceID }
@@ -114,6 +115,9 @@ const configure = (directory: string, beforeEnable: Effect.Effect<unknown, unkno
 })
 const terminalAt = (ordinal: number, requireReceipt = true) => Effect.gen(function* () {
   const db = (yield* Database.Service).db
+  const source = yield* db.select({ directory: SessionTable.directory }).from(SessionTable)
+    .where(sql`${SessionTable.id}=${sourceID}`).get()
+  if (!source) throw new Error("Missing original event source Session")
   const now = Date.now()
   yield* db.run(sql`INSERT INTO session_input(id,session_id,prompt,delivery,admitted_seq,promoted_seq,time_created)
     VALUES('msg_source_input',${sourceID},'{"text":"ordinary source"}','queue',1,2,${now})`)
@@ -126,7 +130,7 @@ const terminalAt = (ordinal: number, requireReceipt = true) => Effect.gen(functi
   yield* db.run(sql`INSERT INTO session_context_selection(selection_id,session_id,activity_id,revision,trigger_input_id,location_key,
     query_fingerprint,authorization_fingerprint,authorization_epoch,execution_fingerprint,selected_source_fingerprint,
     observed_location_mutation_epoch,next_revalidation_at,graph_revisions,graph_statuses,selected_refs,projection,projection_hash,token_count,
-    artifact_write_status,inline_audit,security_namespace_id,project_scope_key,released_knowledge_binding_state,released_knowledge_exact_refs,released_knowledge_exact_refs_fingerprint,created_at) SELECT 'selection_source',${sourceID},'activity_source',1,'msg_source_input',directory,
+    artifact_write_status,inline_audit,security_namespace_id,project_scope_key,released_knowledge_binding_state,released_knowledge_exact_refs,released_knowledge_exact_refs_fingerprint,created_at) SELECT 'selection_source',${sourceID},'activity_source',1,'msg_source_input',${source.directory},
       'query','auth',1,'execution','source',0,${now+10000},'{}','{}','[]','{}',${"e".repeat(64)},2,'degraded_unavailable','{}','task-namespace','task-project','unavailable','[]',${Hash.sha256("[]")},${now}
       FROM session WHERE id=${sourceID}`)
   yield* db.run("INSERT INTO session_provider_owner_lease(owner_token,registered_at,heartbeat_at,lease_expires_at) VALUES('source_owner',CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)+600000)")

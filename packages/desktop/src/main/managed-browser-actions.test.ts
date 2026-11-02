@@ -26,8 +26,19 @@ async function main(){
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  const window=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
  const contents=window.webContents
+ // Linux can acknowledge CDP input before the first rendered frame accepts events.
+ const ready=process.platform==='linux'?new Promise(resolve=>window.once('ready-to-show',()=>resolve(undefined))):undefined
  try {
   await contents.loadURL('http://127.0.0.1:'+server.address().port)
+  if(ready){
+   await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('MANAGED_BROWSER_INPUT_FIXTURE_RENDER_TIMEOUT')),5000)
+    ready.then(()=>{clearTimeout(timer);resolve(undefined)})
+   })
+   window.show()
+   window.focus()
+   contents.focus()
+  }
   contents.debugger.attach('1.3')
   await contents.debugger.sendCommand('Page.enable')
   await contents.debugger.sendCommand('Accessibility.enable')

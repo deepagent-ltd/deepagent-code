@@ -17,13 +17,18 @@ test.skipIf(process.platform !== "darwin")("actual private browser host grants e
   expect(main.success && child.success).toBe(true)
   const process = Bun.spawn([managedBrowserInputFixtureExecutable, main.outputs[0]!.path], {
     env: { ...managedBrowserInputFixtureEnvironment, PATH: globalThis.process.env.PATH, HOME: root, TMPDIR: root, XDG_DATA_HOME: root, XDG_CONFIG_HOME: root,
-      XDG_CACHE_HOME: root, DAC_BROWSER_TEST_ROOT: root, DAC_BROWSER_CHILD: child.outputs[0]!.path }, stdout: "pipe", stderr: "pipe",
+      XDG_CACHE_HOME: root, DAC_BROWSER_TEST_ROOT: root, DAC_BROWSER_CHILD: child.outputs[0]!.path,
+      DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS: "1" }, stdout: "pipe", stderr: "pipe",
   })
   const timer = setTimeout(() => process.kill(), 55_000)
   const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()])
   clearTimeout(timer)
   await Bun.write(path.join(root, "process.log"), stdout + "\n" + stderr)
   console.log("MANAGED_BROWSER_SCRIPT_EVIDENCE", root)
+  if (code) stderr.split(/\r?\n/).filter((line) => line.length <= 768 && (
+    /^MANAGED_BROWSER_INPUT_DIAGNOSTIC \{"at":\d{1,16},"reason":"[a-z_]{1,64}","expectedClients":\d{1,3},"actualClients":-?\d{1,4}\}$/.test(line) ||
+    /^MANAGED_BROWSER_INPUT_LIFECYCLE \{"at":\d{1,16},"known":(?:true|false),"sameWindow":(?:true|false),"sameRoot":(?:true|false),"collected":(?:true|false),"expectedClients":\d{1,3},"currentClientsCount":-?\d{1,4},"sameClientSet":(?:true|false)\}$/.test(line)
+  )).slice(-20).forEach((line) => console.error(line))
   const result = await Bun.file(path.join(root, "result.json")).json()
   expect({ code, error: code ? result : null }).toEqual({ code: 0, error: null })
   expect(result.deniedTCP).toBe(0)

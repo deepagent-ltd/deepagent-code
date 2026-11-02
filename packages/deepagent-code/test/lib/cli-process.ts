@@ -17,24 +17,74 @@
 // builders (`deepagentCode.serve(opts)`, `deepagentCode.acp(opts)`, `deepagentCode.auth(...)`)
 // without changing the fixture. Long-lived commands like `serve` will need a
 // different return shape — see the TODO at the bottom of OpencodeCli.
-import { test, type TestOptions } from "bun:test"
+import { afterAll, beforeAll, test, type TestOptions } from "bun:test"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AppProcess } from "@deepagent-code/core/process"
 import { Deferred, Duration, Effect, Layer, Queue, Scope, Stream } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import path from "node:path"
+import fs from "node:fs/promises"
 import { TestLLMServer } from "./llm-server"
 import { testProviderConfig } from "./test-provider"
 import { it } from "./effect"
+import type { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
 
 const deepagentCodeRoot = path.resolve(import.meta.dir, "../../")
 const cliEntry = path.join(deepagentCodeRoot, "src/index.ts")
+const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
+
+beforeAll(async () => {
+  if (process.platform !== "win32" || process.env.DEEPAGENT_CODE_TEST_BINARY) return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const directory = path.join(deepagentCodeRoot, ".artifacts/windows-native-cli-process")
+  await fs.mkdir(directory, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: path.join(deepagentCodeRoot, "test/fixture/windows-cli-process-entry.ts"),
+    extraSources: [import.meta.path, path.join(deepagentCodeRoot, "test/fixture/cli-secret-store.ts")],
+    plugins: [{ name: "owned-cli-secret-store-selection", setup(builder) {
+      // The cohort replaces src/index.ts with this fixture; resolve its one
+      // production import in a separate namespace so it executes the real CLI.
+      builder.onResolve({ filter: /^\.\.\/\.\.\/src\/index$/ }, (input) => {
+        if (path.resolve(input.importer) !== path.join(deepagentCodeRoot, "test/fixture/windows-cli-process-entry.ts")) return undefined
+        return { path: path.join(deepagentCodeRoot, "src/.owned-cli-production-entry"), namespace: "owned-cli-production-entry" }
+      })
+      builder.onLoad({ filter: /.*/, namespace: "owned-cli-production-entry" }, async () => ({
+        contents: await Bun.file(cliEntry).text(), loader: "ts", resolveDir: path.dirname(cliEntry),
+      }))
+      builder.onLoad({ filter: /[/\\]src[/\\](?:mcp[/\\]secret-store|im[/\\]device-store)\.ts$/ }, async (input) => {
+        const secret = path.join(deepagentCodeRoot, "src/mcp/secret-store.ts")
+        const device = path.join(deepagentCodeRoot, "src/im/device-store.ts")
+        if (![secret, device].includes(path.resolve(input.path))) return undefined
+        const source = await Bun.file(input.path).text()
+        const from = path.resolve(input.path) === secret
+          ? "export const defaultLayer = layer"
+          : "export const layer = Layer.sync(Service, () => make())"
+        if (source.split(from).length !== 2) throw new Error("CLI fixture backend declaration changed")
+        const to = path.resolve(input.path) === secret
+          ? 'export const defaultLayer = process.env.DAC_CLI_PROCESS_ISOLATED_SECRETS === "1" ? Layer.succeed(Service, make(inMemoryBackend("cli-owned-memory"))) : layer'
+          : `export const layer = process.env.DAC_CLI_PROCESS_ISOLATED_SECRETS === "1"
+            ? Layer.succeed(Service, make({ backend: { id: "cli-custody-unavailable", available: async () => false,
+              get: async () => { throw new Error("CLI fixture must not read device custody") },
+              put: async () => { throw new Error("CLI fixture must not write device custody") },
+              remove: async () => { throw new Error("CLI fixture must not remove device custody") } } }))
+            : Layer.sync(Service, () => make())`
+        return { contents: source.replace(from, to), loader: "ts" }
+      })
+    } }],
+  })
+}, 240_000)
+afterAll(async () => { await native.cohort?.dispose() })
 
 function cliCommand(args: string[], isolatedSecretStore = false) {
   const packagedBinary = process.env.DEEPAGENT_CODE_TEST_BINARY
   if (packagedBinary && isolatedSecretStore) throw new Error("CLI secret-store fixture requires the source CLI")
   if (packagedBinary) return [packagedBinary, ...args]
+  if (process.platform === "win32") {
+    if (!native.cohort) throw new Error("Original Windows CLI cohort is unavailable")
+    return [native.cohort.executable, ...args]
+  }
   return [
     "bun",
     ...(isolatedSecretStore
@@ -231,7 +281,8 @@ export function withCliFixture<A, E>(
 
     // FileSystem.makeTempDirectoryScoped handles both creation and scope-tied
     // cleanup — replaces the old mkdir + addFinalizer pair.
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-" })
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-",
+      ...(native.cohort ? { directory: native.cohort.root } : {}) })
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
     // The V2 location config (packages/core/src/config.ts) discovers config from FILES only — it
@@ -242,6 +293,16 @@ export function withCliFixture<A, E>(
     // location in the child.
     yield* Effect.promise(() => Bun.write(path.join(home, ".deepagent", "code", "config.jsonc"), configJson))
     const env = isolatedEnv(home, configJson)
+    if (native.cohort) Object.assign(env, {
+      USERPROFILE: home, APPDATA: path.join(home, "appdata"), LOCALAPPDATA: path.join(home, "localappdata"),
+      TEMP: path.join(home, "tmp"), TMP: path.join(home, "tmp"), TMPDIR: path.join(home, "tmp"),
+      DEEPAGENT_CODE_HOME: path.join(home, ".deepagent/code"),
+      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(home, "managed"),
+    })
+    const invocation = (args: string[], extra: Record<string, string> | undefined, isolated = false, cwd = home) => native.cohort
+      ? native.cohort.invocation({ args, cwd, inheritEnvironment: false,
+        env: { ...env, ...extra, DAC_CLI_PROCESS_ISOLATED_SECRETS: isolated ? "1" : "0" } })
+      : Promise.resolve(undefined)
 
     const spawn = Effect.fn("deepagentCode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
@@ -251,10 +312,11 @@ export function withCliFixture<A, E>(
       // consumed as the prompt). The old Process.run wrapper defaulted to
       // ignore; ChildProcess.make defaults to pipe, so we set it explicitly.
       const argv = cliCommand(args, options?.isolatedSecretStore)
-      const command = ChildProcess.make(argv[0]!, argv.slice(1), {
-        cwd: home,
-        env: { ...env, ...opts?.env },
-        extendEnv: true,
+      const prepared = yield* Effect.promise(() => invocation(args, opts?.env, options?.isolatedSecretStore))
+      const command = ChildProcess.make(prepared?.cmd[0] ?? argv[0]!, prepared?.cmd.slice(1) ?? argv.slice(1), {
+        cwd: prepared?.cwd ?? home,
+        env: prepared?.env ?? { ...env, ...opts?.env },
+        extendEnv: !prepared,
         stdin: "ignore",
       })
       // Pass timeout to appProc.run rather than wrapping with
@@ -312,15 +374,16 @@ export function withCliFixture<A, E>(
       argv.push("--port", String(opts?.port ?? 0))
       if (opts?.hostname) argv.push("--hostname", opts.hostname)
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
+      const prepared = yield* Effect.promise(() => invocation(argv, opts?.env))
 
       // Acquire the subprocess; release sends SIGTERM and awaits exit on
       // scope close. Wrapped in Effect.ignore so a flaky kill doesn't surface
       // as a finalizer error during test teardown.
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() =>
-          Bun.spawn(cliCommand(argv), {
-            cwd: home,
-            env: { ...process.env, ...env, ...opts?.env },
+          Bun.spawn(prepared?.cmd ?? cliCommand(argv), {
+            cwd: prepared?.cwd ?? home,
+            env: prepared?.env ?? { ...process.env, ...env, ...opts?.env },
             stdout: "pipe",
             stderr: "pipe",
           }),
@@ -405,15 +468,16 @@ export function withCliFixture<A, E>(
       const argv = ["acp"]
       if (opts?.cwd) argv.push("--cwd", opts.cwd)
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
+      const prepared = yield* Effect.promise(() => invocation(argv, opts?.env, false, opts?.cwd ?? home))
 
       // Acquire the subprocess. Release ends stdin (clean shutdown — ACP exits
       // on stdin EOF) and falls back to SIGTERM if it doesn't exit promptly.
       // Either way we await proc.exited so the test scope doesn't leak.
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() =>
-          Bun.spawn(cliCommand(argv), {
-            cwd: opts?.cwd ?? home,
-            env: { ...process.env, ...env, ...opts?.env },
+          Bun.spawn(prepared?.cmd ?? cliCommand(argv), {
+            cwd: prepared?.cwd ?? opts?.cwd ?? home,
+            env: prepared?.env ?? { ...process.env, ...env, ...opts?.env },
             stdin: "pipe",
             stdout: "pipe",
             stderr: "pipe",

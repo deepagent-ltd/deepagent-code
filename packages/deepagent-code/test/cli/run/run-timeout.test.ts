@@ -19,10 +19,24 @@ describe("deepagentCode run (non-interactive timeout exit)", () => {
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
         yield* llm.hang
+        const started = performance.now()
+        let firstProviderMs: number | null = null
+        yield* llm.wait(1).pipe(
+          Effect.tap(() => Effect.sync(() => { firstProviderMs = Math.round(performance.now() - started) })),
+          Effect.forkScoped,
+        )
         const result = yield* deepagentCode.run("say hi", {
           timeoutMs: 30_000,
           env: { DEEPAGENT_CODE_RUN_TIMEOUT_MS: "5000" },
         })
+        console.error("CLI_RUN_TIMEOUT_PHASES", JSON.stringify({
+          firstProviderMs,
+          durationMs: result.durationMs,
+          termination: result.termination,
+          exitCode: result.exitCode,
+          calls: yield* llm.calls,
+          pending: yield* llm.pending,
+        }))
         expect(result.termination).toBe("exited")
         expect(result.exitCode).not.toBe(0)
         expect(`${result.stdout}\n${result.stderr}`).toContain("Timed out")

@@ -59,6 +59,7 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
         expect(config.mcp.keeper).toEqual({ type: "local", command: ["echo", "hi"] })
       }),
     60_000,
+    { isolatedSecretStore: true },
   )
 
   cliIt.concurrent(

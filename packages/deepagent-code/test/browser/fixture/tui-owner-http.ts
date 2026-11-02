@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises"
 import path from "node:path"
 
 await BrowserNativeHost.prepare()
-const server = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+const server = await listenForFixture()
 try {
   const connect = { attachID: "not-issued", generation: "not-issued", secret: "a".repeat(64) }
   const requests = [
@@ -74,3 +74,11 @@ try {
   await server.stop()
 }
 process.exit(0)
+
+async function listenForFixture() {
+  if (process.platform === "win32") {
+    const { Server } = await import("../../fixture/unsealed-canonical-server")
+    return Server.listen({ hostname: "127.0.0.1", port: 0, username: "operator", password: "private-fixture" })
+  }
+  return Server.listen({ hostname: "127.0.0.1", port: 0 })
+}

@@ -171,8 +171,9 @@ describe("Core V2 TaskWorkspace", () => {
         runID: admitted.run.runID,
         parentDirectory: repo,
       })
+      const repositoryRoot = gitIn(repo, ["rev-parse", "--show-toplevel"]).stdout.toString().trim()
       const derived = TaskWorkspace.derive({
-        repositoryRoot: gitIn(repo, ["rev-parse", "--show-toplevel"]).stdout.toString().trim(),
+        repositoryRoot,
         operationKey: admitted.run.childSessionID,
       })
       expect(receipt.baseCommit).toBe(head)
@@ -192,7 +193,7 @@ describe("Core V2 TaskWorkspace", () => {
       expect(ready.workspace_branch_state).toBe("ready")
       expect(ready.workspace_target_branch).toBe(receipt.branch)
       expect(ready.workspace_base_commit).toBe(head)
-      expect(ready.workspace_repository_root).toBe(repo)
+      expect(ready.workspace_repository_root).toBe(repositoryRoot)
 
       // Exact re-prepare (crash between receipt and child start) adopts: same receipt, one worktree.
       const again = yield* TaskWorkspace.prepare(db, { runID: admitted.run.runID, parentDirectory: repo })

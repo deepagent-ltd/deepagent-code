@@ -211,7 +211,7 @@ function collectTsDir(absDir: string, repoRoot: string): Record<string, string> 
   const out: Record<string, string> = {}
   if (!fs.existsSync(absDir)) return out
   for (const file of walkTsFiles(absDir)) {
-    const relPath = path.relative(repoRoot, file)
+    const relPath = path.relative(repoRoot, file).split(path.sep).join("/")
     out[relPath] = digestFileContent(fs.readFileSync(file, "utf8"))
   }
   return out

@@ -157,7 +157,25 @@ import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 // The isolated unknown-outcome process oracle reopens this file across two Bun processes.
 // Normal runner tests keep their existing per-test in-memory authority.
-const database = Database.layerFromPath(process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB ?? ":memory:")
+const unknownProcessStarted = performance.now()
+const unknownProcessPhases = new Set<string>()
+const traceUnknownProcess = (phase: string) => {
+  if (!process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB || unknownProcessPhases.has(phase)) return
+  // Layer.tap also observes memoized lookups; record the first acquisition milestone only.
+  unknownProcessPhases.add(phase)
+  console.error(JSON.stringify({ test: "runner-unknown-process", phase,
+    recovering: process.env.DEEPAGENT_TEST_RUNNER_EFFECT_PHASE === "recover",
+    elapsedMs: Math.round(performance.now() - unknownProcessStarted) }))
+}
+const database = process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB
+  ? Layer.unwrap(Effect.gen(function* () {
+      traceUnknownProcess("database-layer-open")
+      yield* Effect.addFinalizer(() => Effect.sync(() => traceUnknownProcess("database-layer-closed")))
+      return Database.layerFromPath(process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB!).pipe(
+        Layer.tap(() => Effect.sync(() => traceUnknownProcess("database-layer-ready"))),
+      )
+    }))
+  : Database.layerFromPath(":memory:")
 // Real builtin tools resolve the Location on disk; keep the ordinary runner
 // fixture self-contained instead of requiring a host-level /project directory.
 const testDirectory = process.env.DEEPAGENT_TEST_RUNNER_DIRECTORY ?? tmpRoot()
@@ -1119,7 +1137,8 @@ governed.live("retains unknown recovery after interrupting builtin bash after it
     const running = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
     const request = yield* Deferred.await(asked)
     yield* permissions.reply({ requestID: request.id, reply: "once" })
-    while (!(yield* Effect.promise(() => Bun.file(marker).exists()))) yield* Effect.sleep("10 millis")
+    while (!(yield* Effect.promise(async () => await Bun.file(marker).exists() && await Bun.file(marker).text() === "started")))
+      yield* Effect.sleep("10 millis")
     expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("started")
     yield* session.interrupt(sessionID)
     expect((yield* Fiber.join(running))._tag).toBe("Failure")
@@ -2166,7 +2185,7 @@ describe("SessionRunnerLLM", () => {
       expect(settleHookInputs[0]?.sessionID).toBe(sessionID)
       // The workspace path is the runner's Location project root (informational; the deepagent-code
       // admission derives its authoritative workspacePath from the canonical Session row).
-      expect(settleHookInputs[0]?.workspacePath).toBe(path.parse(process.cwd()).root)
+      expect(settleHookInputs[0]?.workspacePath).toBe(path.parse(testDirectory).root)
       expect(settleHookInputs[0]?.activityId).toMatch(/^activity_/)
     }),
   )
@@ -5938,7 +5957,17 @@ describe("SessionRunnerLLM", () => {
 
   it.effect("quarantines an unknown tool outcome without replaying its body", () =>
     Effect.gen(function* () {
+      const started = performance.now()
+      const trace = (phase: string) => {
+        if (!process.env.DEEPAGENT_TEST_RUNNER_EFFECT_DB) return
+        console.error(JSON.stringify({ test: "runner-unknown-process", phase,
+          recovering: process.env.DEEPAGENT_TEST_RUNNER_EFFECT_PHASE === "recover",
+          elapsedMs: Math.round(performance.now() - started) }))
+      }
+      trace("case-enter")
+      yield* Effect.addFinalizer(() => Effect.sync(() => trace("case-resources-finalized")))
       yield* setup
+      trace("setup-ready")
       const session = yield* SessionV2.Service
       const registry = yield* ToolRegistry.Service
       const { db } = yield* Database.Service
@@ -6007,6 +6036,7 @@ describe("SessionRunnerLLM", () => {
       }
 
       const first = yield* session.resume(id).pipe(Effect.exit)
+      trace("first-resume-returned")
       expect(Exit.isFailure(first)).toBe(true)
       if (Exit.isFailure(first))
         expect(Cause.squash(first.cause)).toBeInstanceOf(
@@ -6054,6 +6084,7 @@ describe("SessionRunnerLLM", () => {
       expect(inputs[0]?.promoted_seq).not.toBeNull()
 
       const retry = yield* session.resume(id).pipe(Effect.exit)
+      trace("retry-resume-returned")
       expect(Exit.isFailure(retry)).toBe(true)
       if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toBeInstanceOf(V2ToolEffect.RecoveryRequiredError)
       expect(requests).toHaveLength(recovering ? 0 : 1)
@@ -6080,6 +6111,7 @@ describe("SessionRunnerLLM", () => {
       expect(
         yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, id)).all().pipe(Effect.orDie),
       ).toEqual(inputs)
+      trace("assertions-complete")
       if (databaseFile)
         yield* Effect.promise(() =>
           Bun.write(
@@ -6096,6 +6128,7 @@ describe("SessionRunnerLLM", () => {
             }),
           ),
         )
+      trace("receipt-written")
     }),
   )
 

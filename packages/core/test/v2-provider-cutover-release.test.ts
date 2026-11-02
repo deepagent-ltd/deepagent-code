@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url"
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { eq, sql } from "drizzle-orm"
@@ -22,28 +22,68 @@ import { tmpdir } from "./fixture/tmpdir"
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 const issuanceKey = V2OwnerAuthorization.generateAuthorizationKeyPair()
-const run = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService>) =>
-  Effect.runPromise(Effect.gen(function* () {
+const cuts = ["20260813041200_v2_provider_shadow_authority", "20260813120346_v2_provider_parity_campaign"] as const
+const roots = new Map<string, Awaited<ReturnType<typeof tmpdir>>>()
+const run = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService>, signal?: AbortSignal) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
       // Migrations run on the same FK-on client contract as production bootstrap.
       yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
       return yield* effect
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped))
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped),
+    { signal },
+  )
 
 describe("V2 provider owner containment", () => {
+  // Empty-schema construction is fixture setup. Legacy rows and both real forward upgrades
+  // remain inside the upgrade oracle; dispatch and recovery still reopen the current schema.
+  beforeAll(async () => {
+    const started = performance.now()
+    const signal = AbortSignal.timeout(110_000)
+    for (const cut of [...cuts, "takeover"]) {
+      const root = await tmpdir()
+      roots.set(cut, root)
+      const cutIndex = cut === "takeover" ? migrations.length : migrations.findIndex((migration) => migration.id === cut)
+      if (cutIndex <= 0) throw new Error(`Missing provider cutover migration: ${cut}`)
+      await run(
+        `${root.path}/${cut}.sqlite`,
+        Effect.gen(function* () {
+          yield* DatabaseMigration.applyOnly(yield* makeDb, migrations.slice(0, cutIndex))
+        }),
+        signal,
+      )
+      console.info(JSON.stringify({ test: "provider-cutover-schema", phase: "closed", cut,
+        elapsedMs: Math.round(performance.now() - started) }))
+    }
+  }, 120_000)
+
+  afterAll(async () => {
+    await Promise.all([...roots.values()].map((root) => root[Symbol.asyncDispose]()))
+  })
+
   test("upgrades pre-V2 and pre-campaign disk databases without losing durable sessions", async () => {
-    await using tmp = await tmpdir()
-    const cuts = ["20260813041200_v2_provider_shadow_authority", "20260813120346_v2_provider_parity_campaign"] as const
+    const started = performance.now()
+    // One deadline covers both cuts and interrupts the Effect before Bun advances to another case.
+    const signal = AbortSignal.timeout(29_000)
+    const trace = (phase: string, cut?: number) => console.info(JSON.stringify({
+      test: "provider-cutover-upgrade", phase, elapsedMs: Math.round(performance.now() - started), cut,
+    }))
+    trace("case-enter")
     const qualifications: boolean[] = []
 
     for (const cut of cuts) {
+      trace("cut-start", cuts.indexOf(cut))
+      const tmp = roots.get(cut)
+      if (!tmp) throw new Error(`Provider cutover schema was not prepared: ${cut}`)
       const filename = `${tmp.path}/${cut}.sqlite`
       await run(
         filename,
         Effect.gen(function* () {
           const db = yield* makeDb
+          trace("database-ready", cuts.indexOf(cut))
           const cutIndex = migrations.findIndex((migration) => migration.id === cut)
           expect(cutIndex).toBeGreaterThan(0)
-          yield* DatabaseMigration.applyOnly(db, migrations.slice(0, cutIndex))
+          trace("legacy-schema-opened", cuts.indexOf(cut))
 
           const projectID = ProjectV2.ID.make(`project-${cut}`)
           const sessionID = SessionSchema.ID.make(`ses_${cut}`)
@@ -62,6 +102,7 @@ describe("V2 provider owner containment", () => {
             )
 
           yield* DatabaseMigration.applyOnly(db, migrations)
+          trace("upgrade-complete", cuts.indexOf(cut))
           expect(
             yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get(),
           ).toEqual({ id: sessionID })
@@ -75,14 +116,18 @@ describe("V2 provider owner containment", () => {
           expect(qualifications.slice(-2)).toEqual([false, false])
 
           yield* DatabaseMigration.applyOnly(db, migrations)
+          trace("exact-reapply-complete", cuts.indexOf(cut))
           expect(
             yield* db.get<{ count: number }>(
               sql`SELECT count(*) AS count FROM migration WHERE id = ${migrations.at(-1)!.id}`,
             ),
           ).toEqual({ count: 1 })
         }),
+        signal,
       )
+      trace("database-scope-closed", cuts.indexOf(cut))
     }
+    trace("case-body-complete")
   })
 
   test("requires an exact, active, build-bound owner authorization", async () => {
@@ -189,30 +234,47 @@ describe("V2 provider owner containment", () => {
   })
 
   test("takes over an expired process owner without replay and leaves a rollback-safe database", async () => {
-    await using tmp = await tmpdir()
+    const started = performance.now()
+    const signal = AbortSignal.timeout(14_000)
+    const trace = (phase: string) => console.info(JSON.stringify({
+      test: "provider-cutover-expired-owner", phase, elapsedMs: Math.round(performance.now() - started),
+    }))
+    trace("case-enter")
+    const tmp = roots.get("takeover")
+    if (!tmp) throw new Error("Provider takeover schema was not prepared")
+    trace("directory-ready")
     const filename = `${tmp.path}/takeover.sqlite`
     const marker = `${tmp.path}/physical-dispatch.json`
     const fixture = new URL("./fixture/v2-provider-owner-process.ts", import.meta.url)
-    const first = Bun.spawn([process.execPath, fileURLToPath(fixture), "dispatch", filename, marker], {
-      cwd: import.meta.dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const firstOutput = await new Response(first.stdout).text()
-    const firstError = await new Response(first.stderr).text()
-    expect(await first.exited, firstError).toBe(0)
-    const dispatched = JSON.parse(firstOutput) as { receiptId: string }
+    const processOutput = async (mode: "dispatch" | "recover", receiptID?: string) => {
+      const child = Bun.spawn([process.execPath, fileURLToPath(fixture), mode, filename, marker, ...(receiptID ? [receiptID] : [])], {
+        cwd: import.meta.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+        signal,
+        killSignal: "SIGKILL",
+      })
+      trace(`${mode}-started`)
+      try {
+        const [status, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ])
+        signal.throwIfAborted()
+        expect(status, stderr).toBe(0)
+        trace(`${mode}-exited`)
+        return stdout
+      } finally {
+        if (child.exitCode === null) child.kill("SIGKILL")
+        await child.exited
+      }
+    }
+    const dispatched = JSON.parse(await processOutput("dispatch")) as { receiptId: string }
 
     await Bun.sleep(650)
-    const second = Bun.spawn([process.execPath, fileURLToPath(fixture), "recover", filename, marker, dispatched.receiptId], {
-      cwd: import.meta.dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const secondOutput = await new Response(second.stdout).text()
-    const secondError = await new Response(second.stderr).text()
-    expect(await second.exited, secondError).toBe(0)
-    expect(JSON.parse(secondOutput)).toEqual({
+    trace("expiry-wait-complete")
+    expect(JSON.parse(await processOutput("recover", dispatched.receiptId))).toEqual({
       state: "indeterminate_after_crash",
       errorCode: "owner_lost_after_dispatch",
       recovered: 0,
@@ -220,5 +282,6 @@ describe("V2 provider owner containment", () => {
       oldOwnerHeartbeat: "provider_owner_lease_not_live",
       physicalDispatches: 1,
     })
+    trace("case-body-complete")
   }, 15_000)
 })

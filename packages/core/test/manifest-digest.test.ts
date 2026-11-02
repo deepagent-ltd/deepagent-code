@@ -101,6 +101,7 @@ describe("generateManifest (live tree)", () => {
     for (const group of Object.values(manifest.inputs)) {
       for (const key of Object.keys(group)) {
         expect(key.startsWith("/")).toBe(false)
+        expect(key).not.toContain("\\")
         expect(key).not.toMatch(/^[A-Za-z]:[\\/]/)
         expect(key).not.toContain("core-v2-beta-w2-digest")
       }
