@@ -94,15 +94,23 @@ async function main(){
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
   if(${diagnosticAB}){
-   // The original oracle stays fixed. Only an actual frame capture separates HTTP paths.
+   // The original oracle stays fixed. Only a real first-render event gates one HTTP path.
    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original',stage:'method-sequence',methods:originalSequence}))
    for(const variant of [
-    {name:'http-baseline',transport:'http',capture:false},
-    {name:'http-capture-frame',transport:'http',capture:true},
-    {name:'data-positive-control',transport:'data',capture:false},
+    {name:'http-baseline',transport:'http',waitReady:false},
+    {name:'http-ready-to-show',transport:'http',waitReady:true},
+    {name:'data-positive-control',transport:'data',waitReady:false},
    ]){
     const owner=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
     const probe=owner.webContents
+    const created=performance.now()
+    const rendered={fired:false,elapsedMs:null}
+    const ready=new Promise(resolve=>owner.once('ready-to-show',()=>{
+     rendered.fired=true
+     rendered.elapsedMs=Number((performance.now()-created).toFixed(3))
+     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'ready-to-show-event',...rendered,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
+     resolve(undefined)
+    }))
     const phase={stage:'page-load'}
     const methods=[]
     const send=async(method,params)=>{
@@ -114,6 +122,13 @@ async function main(){
     }
     try{
      await probe.loadURL(variant.transport==='http'?'http://127.0.0.1:'+server.address().port:'data:text/html,'+encodeURIComponent(originalMarkup))
+     if(variant.waitReady){
+      phase.stage='ready-to-show-wait'
+      await new Promise((resolve,reject)=>{
+       const timer=setTimeout(()=>reject(new Error('DIAGNOSTIC_READY_TO_SHOW_TIMEOUT')),5000)
+       ready.then(()=>{clearTimeout(timer);resolve(undefined)})
+      })
+     }
      if(process.platform==='linux'){owner.show();owner.focus();probe.focus()}
      phase.stage='debugger-attach'
      probe.debugger.attach('1.3')
@@ -123,14 +138,7 @@ async function main(){
      if(!entry.nodeId)throw new Error('DIAGNOSTIC_ENTRY_MISSING')
      await send('DOM.focus',{nodeId:entry.nodeId})
      await inputTrace(probe,'entry',variant.name,'ready')
-     if(variant.capture){
-      phase.stage='webContents.capturePage'
-      const image=await probe.capturePage(undefined,{stayHidden:true})
-      const size=image.getSize()
-      const nonempty=!image.isEmpty()&&size.width>0&&size.height>0
-      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'capture-ack',nonempty,width:size.width,height:size.height,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
-      if(!nonempty)throw new Error('DIAGNOSTIC_CAPTURE_EMPTY')
-     }
+     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'first-render-before-input',...rendered}))
      const select={key:'a',windowsVirtualKeyCode:65,modifiers:process.platform==='darwin'?4:2}
      await send('Input.dispatchKeyEvent',{type:'keyDown',...select,commands:['selectAll']})
      await send('Input.dispatchKeyEvent',{type:'keyUp',...select})
@@ -139,11 +147,18 @@ async function main(){
      await send('Input.dispatchKeyEvent',{type:'keyUp',...erase})
      await send('Input.insertText',{text:'中文一次'})
      await inputTrace(probe,'entry',variant.name,'terminal')
+     if(variant.waitReady){
+      phase.stage='capture-after-input'
+      const image=await probe.capturePage(undefined,{stayHidden:true})
+      const size=image.getSize()
+      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'capture-after-input-ack',nonempty:!image.isEmpty()&&size.width>0&&size.height>0,width:size.width,height:size.height,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
+     }
     }catch(error){
      // Diagnostic failures never replace the original business assertions.
      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',during:phase.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
     }finally{
      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'method-sequence',methods}))
+     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'first-render-final',...rendered}))
      owner.destroy()
     }
    }
