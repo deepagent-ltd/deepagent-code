@@ -9,7 +9,13 @@ import {
 
 test("actual Chromium references reject stale nodes and focus theft without exposing passwords", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-browser-inputs-")))
-  const diagnosticAB = process.env.DAC_BROWSER_INPUT_FIXTURE_AB_DIAGNOSTIC === "1"
+  const diagnosticAB =
+    process.env.DAC_BROWSER_INPUT_FIXTURE_AB_DIAGNOSTIC === "1" ||
+    (process.platform === "linux" &&
+      process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+      process.env.DAC_TEST_FILE === "src/main/managed-browser-actions.test.ts" &&
+      process.env.DAC_TEST_NAME ===
+        "actual Chromium references reject stale nodes and focus theft without exposing passwords")
   await fs.mkdir(path.join(root, "home"), { mode: 0o700 })
   await Bun.write(
     path.join(root, "main.ts"),
@@ -22,6 +28,7 @@ app.setPath("userData", ${JSON.stringify(path.join(root, "profile"))})
 app.on("window-all-closed",()=>{})
 const server=createServer((_req,res)=>res.end('<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
+const originalSequence=[]
 const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
 const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),windowFocused:BrowserWindow.fromWebContents(contents)?.isFocused(),contentsFocused:contents.isFocused(),state:await inputState(contents,id)}))
 async function main(){
@@ -55,6 +62,7 @@ async function main(){
   await contents.debugger.sendCommand('Page.enable')
   await contents.debugger.sendCommand('Accessibility.enable')
   const helper=createManagedBrowserActions({send:async(method,params)=>{
+   if(!result.filled)originalSequence.push(method)
    const response=await contents.debugger.sendCommand(method,params)
    if(process.platform==='linux'&&['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(contents,'entry','original',method,params)
    return response
@@ -85,65 +93,107 @@ async function main(){
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
   if(${diagnosticAB}){
-   // Diagnostic input stays in a separate owned page after the original business flow.
-   const diagnostic=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
-   const probe=diagnostic.webContents
-   const setup={stage:'created'}
-   const mark=(stage)=>{setup.stage=stage;console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage}))}
-   try{
-    mark('owned-page-load-start')
-    await probe.loadURL('data:text/html,<input id="probe" value="before">')
-    mark('owned-page-loaded')
-    mark('debugger-attach-start')
-    probe.debugger.attach('1.3')
-    mark('debugger-attached')
-    mark('page-enable-start')
-    await probe.debugger.sendCommand('Page.enable')
-    mark('page-enabled')
-    for(const variant of [
-     {name:'current-keyDown',type:'keyDown',code:false,control:false},
-     {name:'rawKeyDown',type:'rawKeyDown',code:false,control:false},
-     {name:'keyDown-KeyA',type:'keyDown',code:true,control:false},
-     {name:'rawKeyDown-KeyA',type:'rawKeyDown',code:true,control:false},
-     {name:'control-keyDown-KeyA',type:'keyDown',code:true,control:true},
-     {name:'control-rawKeyDown-KeyA',type:'rawKeyDown',code:true,control:true},
-    ]){
-     const phase={stage:'owned-page-load'}
-     try{
-      await probe.loadURL('data:text/html,<input id="probe" value="before">')
-      if(process.platform==='linux'){diagnostic.show();probe.focus()}
-      phase.stage='DOM.getDocument'
-      const document=await probe.debugger.sendCommand('DOM.getDocument')
-      phase.stage='DOM.querySelector'
-      const entry=await probe.debugger.sendCommand('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#probe'})
-      phase.stage='DOM.focus'
-      await probe.debugger.sendCommand('DOM.focus',{nodeId:entry.nodeId})
-      phase.stage='ready-state'
-      await inputTrace(probe,'probe',variant.name,'ready')
-      const send=async(params)=>{
-       phase.stage='Input.dispatchKeyEvent:'+params.type+':'+params.key
-       await probe.debugger.sendCommand('Input.dispatchKeyEvent',params)
-       await inputTrace(probe,'probe',variant.name,'Input.dispatchKeyEvent',params)
-      }
-      if(variant.control)await send({type:variant.type,key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:2})
-      const select={key:'a',windowsVirtualKeyCode:65,modifiers:2,...(variant.code?{code:'KeyA'}:{})}
-      await send({type:variant.type,...select,commands:['selectAll']})
-      await send({type:'keyUp',...select})
-      if(variant.control)await send({type:'keyUp',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17,modifiers:0})
-      const erase={key:'Backspace',windowsVirtualKeyCode:8,modifiers:0,...(variant.code?{code:'Backspace'}:{})}
-      await send({type:variant.type,...erase})
-      await send({type:'keyUp',...erase})
-      phase.stage='Input.insertText'
-      await probe.debugger.sendCommand('Input.insertText',{text:'中文一次'})
-      await inputTrace(probe,'probe',variant.name,'Input.insertText')
-     }catch(error){
-      // A diagnostic failure cannot replace the original case's business assertions.
-      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',during:phase.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
+   // Original results stay fixed. Cold windows and reloads use the identical HTTP page.
+   // Navigations reset values; diagnostics never assign values or script selections.
+   console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original',stage:'method-sequence',methods:originalSequence}))
+   for(const variant of [
+    {name:'http-cold-helper',cold:true,frontend:false,focus:'backend',guard:true,world:true,helper:true},
+    {name:'http-cold-direct',cold:true,frontend:false,focus:'backend',guard:false,world:false,helper:false},
+    {name:'http-helper-backend',cold:false,frontend:false,focus:'backend',guard:true,world:true,helper:true},
+    {name:'http-direct-backend',cold:false,frontend:false,focus:'backend',guard:false,world:false,helper:false},
+    {name:'http-direct-ax',cold:false,frontend:false,focus:'backend',guard:true,world:false,helper:false},
+    {name:'http-direct-world',cold:false,frontend:false,focus:'backend',guard:true,world:true,helper:false},
+    {name:'http-helper-frontend',cold:false,frontend:true,focus:'backend',guard:true,world:true,helper:true},
+    {name:'http-helper-node',cold:false,frontend:true,focus:'node',guard:true,world:true,helper:true},
+   ]){
+    const owner=variant.cold?new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}}):window
+    const probe=owner.webContents
+    const phase={stage:'http-page-load'}
+    const identity={node:0,backend:0,frame:''}
+    const methods=[]
+    const send=async(method,params)=>{
+     phase.stage=method
+     if(variant.helper&&variant.focus==='node'&&method==='DOM.focus'){
+      if(params?.backendNodeId!==identity.backend)throw new Error('DIAGNOSTIC_TARGET_IDENTITY_MISMATCH')
+      params={nodeId:identity.node}
      }
+     methods.push(method)
+     const response=await probe.debugger.sendCommand(method,params)
+     if(method==='Accessibility.getFullAXTree')identity.backend=response.nodes?.find(node=>node.role?.value==='textbox'&&node.name?.value==='Entry')?.backendDOMNodeId??0
+     if(['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(probe,'entry',variant.name,method,params)
+     return response
     }
-   }catch(error){
-    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'diagnostic-setup',stage:'diagnostic-error',during:setup.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
-   }finally{diagnostic.destroy()}
+    const diagnostic=createManagedBrowserActions({send,current:async()=>{},generation:()=>1,fail:code=>{throw new Error(code)},dispatched:()=>{}})
+    try{
+     if(probe.debugger.isAttached())probe.debugger.detach()
+     await probe.loadURL('http://127.0.0.1:'+server.address().port)
+     if(process.platform==='linux'){owner.show();owner.focus();probe.focus()}
+     phase.stage='debugger-attach'
+     probe.debugger.attach('1.3')
+     await send('Page.enable')
+     await send('Accessibility.enable')
+     phase.stage='helper-snapshot'
+     const page=await diagnostic.snapshot({type:'snapshot',tabID:'diagnostic',generation:1})
+     const entry=page.refs.find(ref=>ref.name==='Entry')
+     if(!entry)throw new Error('DIAGNOSTIC_ENTRY_MISSING')
+     identity.frame=page.frameID
+     if(!identity.backend)throw new Error('DIAGNOSTIC_TARGET_IDENTITY_MISSING')
+     if(variant.frontend){
+      const document=await send('DOM.getDocument')
+      const node=await send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#entry'})
+      const description=await send('DOM.describeNode',{nodeId:node.nodeId,depth:0})
+      identity.node=node.nodeId
+      if(!identity.node||description.node.backendNodeId!==identity.backend)throw new Error('DIAGNOSTIC_FRONTEND_TARGET_CHANGED')
+     }
+     await inputTrace(probe,'entry',variant.name,'ready')
+     if(variant.helper){
+      await diagnostic.execute({type:'fill',tabID:'diagnostic',generation:1,frameID:page.frameID,observationRevision:page.observationRevision,ref:entry.ref,text:'中文一次'})
+     }else{
+      const guard=async()=>{
+       if(!variant.guard)return
+       const frame=await send('Page.getFrameTree')
+       if(frame.frameTree.frame.id!==identity.frame)throw new Error('DIAGNOSTIC_FRAME_CHANGED')
+       const ax=await send('Accessibility.getPartialAXTree',{backendNodeId:identity.backend,fetchRelatives:false})
+       if(!ax.nodes.some(node=>node.backendDOMNodeId===identity.backend))throw new Error('DIAGNOSTIC_AX_TARGET_MISSING')
+       const node=await send('DOM.describeNode',{backendNodeId:identity.backend,depth:0})
+       if(node.node.backendNodeId!==identity.backend)throw new Error('DIAGNOSTIC_BACKEND_CHANGED')
+      }
+      const inspect=async()=>{
+       await guard()
+       if(!variant.world)return
+       const world=await send('Page.createIsolatedWorld',{frameId:identity.frame,worldName:'dac-managed-input-v1',grantUniveralAccess:false})
+       const resolved=await send('DOM.resolveNode',{backendNodeId:identity.backend,executionContextId:world.executionContextId})
+       if(!resolved.object?.objectId)throw new Error('DIAGNOSTIC_RESOLUTION_FAILED')
+       try{
+        await guard()
+        const active=await send('Runtime.callFunctionOn',{objectId:resolved.object.objectId,functionDeclaration:'function() { return this.isConnected && document.activeElement === this && !(this instanceof HTMLInputElement && ["password","file"].includes(this.type)); }',arguments:[],returnByValue:true,awaitPromise:false,userGesture:false})
+        if(active.exceptionDetails||active.result?.value!==true)throw new Error('DIAGNOSTIC_ACTIVE_TARGET_FAILED')
+       }finally{await send('Runtime.releaseObject',{objectId:resolved.object.objectId})}
+      }
+      await send('DOM.focus',variant.focus==='node'?{nodeId:identity.node}:{backendNodeId:identity.backend})
+      const key=async(name,code,modifiers,commands)=>{
+       await inspect()
+       await guard()
+       const params={key:name,windowsVirtualKeyCode:code,modifiers}
+       await send('Input.dispatchKeyEvent',{type:'keyDown',...params,...(commands?{commands}:{})})
+       await send('Input.dispatchKeyEvent',{type:'keyUp',...params})
+      }
+      await key('a',65,process.platform==='darwin'?4:2,['selectAll'])
+      await key('Backspace',8,0)
+      await inspect()
+      await guard()
+      await send('Input.insertText',{text:'中文一次'})
+     }
+     await inputTrace(probe,'entry',variant.name,'terminal')
+    }catch(error){
+     // Diagnostics never change the original result or its business assertions.
+     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'diagnostic-error',during:phase.stage,name:error?.name,message:String(error?.message??error).slice(0,240)}))
+    }finally{
+     await diagnostic.release()
+     console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'method-sequence',methods}))
+     if(variant.cold)owner.destroy()
+    }
+   }
   }
   await writeFile(${JSON.stringify(path.join(root, "result.json"))},JSON.stringify(result))
  }finally{window.destroy();server.closeAllConnections();server.close()}
