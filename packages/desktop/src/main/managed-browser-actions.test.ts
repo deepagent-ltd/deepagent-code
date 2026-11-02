@@ -30,7 +30,7 @@ const originalMarkup='<html><body><label>Entry<input id="entry" value="before"><
 const server=createServer((_req,res)=>res.end(originalMarkup))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
 const originalSequence=[]
-const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus(),events:window.__dacOwnedInputCounts??null}:null})()')
+const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
 const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),windowFocused:BrowserWindow.fromWebContents(contents)?.isFocused(),contentsFocused:contents.isFocused(),state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
@@ -118,8 +118,6 @@ async function main(){
      phase.stage='debugger-attach'
      probe.debugger.attach('1.3')
      await send('Page.enable')
-     phase.stage='owned-event-counters'
-     await probe.executeJavaScript('(()=>{const counts={keydown:0,keyup:0,mousedown:0,mouseup:0,beforeinput:0,input:0};for(const type of Object.keys(counts))document.addEventListener(type,()=>counts[type]++,true);window.__dacOwnedInputCounts=counts;return true})()')
      const document=await send('DOM.getDocument')
      const entry=await send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#entry'})
      if(!entry.nodeId)throw new Error('DIAGNOSTIC_ENTRY_MISSING')
