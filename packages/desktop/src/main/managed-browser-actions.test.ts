@@ -27,10 +27,10 @@ import { createManagedBrowserActions } from ${JSON.stringify(path.join(import.me
 app.setPath("userData", ${JSON.stringify(path.join(root, "profile"))})
 app.on("window-all-closed",()=>{})
 const originalMarkup='<html><body><label>Entry<input id="entry" value="before"></label><label>Other<input id="other"></label><label>Secret<input type="password" value="NEVER_REVEAL_PASSWORD"></label><select id="pick"><option value="a">A</option><option value="b">B</option></select><button>Go</button></body></html>'
-const server=createServer((req,res)=>{if(req.url==='/typed')res.setHeader('content-type','text/html; charset=utf-8');res.end(originalMarkup)})
+const server=createServer((_req,res)=>res.end(originalMarkup))
 const result={dispatch:0,errors:[],passwordVisible:false,filled:'',focusOther:'',selected:''}
 const originalSequence=[]
-const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus()}:null})()')
+const inputState=(contents,id)=>contents.executeJavaScript('(()=>{const entry=document.getElementById('+JSON.stringify(id)+');return entry?{active:document.activeElement===entry,start:entry.selectionStart,end:entry.selectionEnd,length:entry.value.length,isBefore:entry.value==="before",empty:entry.value==="",matchesFill:entry.value==="中文一次",visible:document.visibilityState==="visible",focused:document.hasFocus(),events:window.__dacOwnedInputCounts??null}:null})()')
 const inputTrace=async(contents,id,scope,stage,params={})=>console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope,stage,type:params.type,key:params.key,code:params.code,modifiers:params.modifiers,commands:params.commands,windowVisible:BrowserWindow.fromWebContents(contents)?.isVisible(),windowFocused:BrowserWindow.fromWebContents(contents)?.isFocused(),contentsFocused:contents.isFocused(),state:await inputState(contents,id)}))
 async function main(){
  await app.whenReady()
@@ -94,14 +94,12 @@ async function main(){
   result.hoverOther=await contents.executeJavaScript('Boolean(window.wrongInput)')
   await helper.release()
   if(${diagnosticAB}){
-   // Preserve the original oracle and isolate HTTP metadata, key dispatch, and focus source.
+   // The original oracle stays fixed. Only an actual frame capture separates HTTP paths.
    console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:'original',stage:'method-sequence',methods:originalSequence}))
    for(const variant of [
-    {name:'http-baseline',transport:'http',path:'/',type:'keyDown',mouse:false},
-    {name:'http-content-type',transport:'http',path:'/typed',type:'keyDown',mouse:false},
-    {name:'http-raw-key',transport:'http',path:'/',type:'rawKeyDown',mouse:false},
-    {name:'http-mouse-focus',transport:'http',path:'/',type:'keyDown',mouse:true},
-    {name:'data-positive-control',transport:'data',path:'/',type:'keyDown',mouse:false},
+    {name:'http-baseline',transport:'http',capture:false},
+    {name:'http-capture-frame',transport:'http',capture:true},
+    {name:'data-positive-control',transport:'data',capture:false},
    ]){
     const owner=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
     const probe=owner.webContents
@@ -111,32 +109,35 @@ async function main(){
      phase.stage=method
      methods.push(method)
      const response=await probe.debugger.sendCommand(method,params)
-     if(['Input.dispatchKeyEvent','Input.insertText','Input.dispatchMouseEvent'].includes(method))await inputTrace(probe,'entry',variant.name,method,params)
+     if(['Input.dispatchKeyEvent','Input.insertText'].includes(method))await inputTrace(probe,'entry',variant.name,method,params)
      return response
     }
     try{
-     await probe.loadURL(variant.transport==='http'?'http://127.0.0.1:'+server.address().port+variant.path:'data:text/html,'+encodeURIComponent(originalMarkup))
+     await probe.loadURL(variant.transport==='http'?'http://127.0.0.1:'+server.address().port:'data:text/html,'+encodeURIComponent(originalMarkup))
      if(process.platform==='linux'){owner.show();owner.focus();probe.focus()}
      phase.stage='debugger-attach'
      probe.debugger.attach('1.3')
      await send('Page.enable')
+     phase.stage='owned-event-counters'
+     await probe.executeJavaScript('(()=>{const counts={keydown:0,keyup:0,mousedown:0,mouseup:0,beforeinput:0,input:0};for(const type of Object.keys(counts))document.addEventListener(type,()=>counts[type]++,true);window.__dacOwnedInputCounts=counts;return true})()')
      const document=await send('DOM.getDocument')
      const entry=await send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'#entry'})
      if(!entry.nodeId)throw new Error('DIAGNOSTIC_ENTRY_MISSING')
-     if(variant.mouse){
-      const geometry=await send('DOM.getContentQuads',{nodeId:entry.nodeId})
-      const quad=geometry.quads?.[0]
-      if(!quad||quad.length!==8||!quad.every(Number.isFinite))throw new Error('DIAGNOSTIC_ENTRY_GEOMETRY_MISSING')
-      const point={x:quad.filter((_value,index)=>index%2===0).reduce((sum,value)=>sum+value,0)/4,y:quad.filter((_value,index)=>index%2===1).reduce((sum,value)=>sum+value,0)/4}
-      await send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1})
-      await send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1})
-     }else await send('DOM.focus',{nodeId:entry.nodeId})
+     await send('DOM.focus',{nodeId:entry.nodeId})
      await inputTrace(probe,'entry',variant.name,'ready')
+     if(variant.capture){
+      phase.stage='webContents.capturePage'
+      const image=await probe.capturePage(undefined,{stayHidden:true})
+      const size=image.getSize()
+      const nonempty=!image.isEmpty()&&size.width>0&&size.height>0
+      console.log('LINUX_BROWSER_INPUT_TRACE',JSON.stringify({scope:variant.name,stage:'capture-ack',nonempty,width:size.width,height:size.height,windowVisible:owner.isVisible(),windowFocused:owner.isFocused()}))
+      if(!nonempty)throw new Error('DIAGNOSTIC_CAPTURE_EMPTY')
+     }
      const select={key:'a',windowsVirtualKeyCode:65,modifiers:process.platform==='darwin'?4:2}
-     await send('Input.dispatchKeyEvent',{type:variant.type,...select,commands:['selectAll']})
+     await send('Input.dispatchKeyEvent',{type:'keyDown',...select,commands:['selectAll']})
      await send('Input.dispatchKeyEvent',{type:'keyUp',...select})
      const erase={key:'Backspace',windowsVirtualKeyCode:8,modifiers:0}
-     await send('Input.dispatchKeyEvent',{type:variant.type,...erase})
+     await send('Input.dispatchKeyEvent',{type:'keyDown',...erase})
      await send('Input.dispatchKeyEvent',{type:'keyUp',...erase})
      await send('Input.insertText',{text:'中文一次'})
      await inputTrace(probe,'entry',variant.name,'terminal')
