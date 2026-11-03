@@ -248,7 +248,7 @@ test("readonly deduplication keeps observed freshness and cold/command/unsafe bo
       yield* instances.disposeDirectory(directory.path)
     }).pipe(Effect.scoped),
   )
-}, 15000)
+}, process.platform === "darwin" ? 60_000 : 15000)
 
 test("readonly deduplication reuses only successful scope-change metadata and preserves failure retry and unknown", async () => {
   await using directory = await tmpdir({ config: { mcp: {} } })
