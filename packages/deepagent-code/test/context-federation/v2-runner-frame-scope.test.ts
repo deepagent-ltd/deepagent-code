@@ -19,6 +19,7 @@ import { LocationIndexRuntime } from "../../src/location-index/runtime"
 import { InstanceStore } from "../../src/project/instance-store"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceRef } from "../../src/effect/instance-ref"
+import { pollWithTimeout } from "../lib/effect"
 
 const bootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const instanceLayer = InstanceStore.defaultLayer.pipe(Layer.provide(bootstrap))
@@ -114,16 +115,18 @@ test("automatic document reads retain the real InstanceRef and reject a retired 
       const handle = yield* runtime.current().pipe(Effect.provideService(InstanceRef, ctx))
       expect(handle).toBeDefined()
       // The production watcher owns initialization; wait without invoking a competing rebuild.
-      yield* Effect.promise(async () => {
-        for (let attempt = 0; attempt < 100; attempt++) {
+      yield* pollWithTimeout(
+        Effect.promise(async () => {
           const ready = await Effect.runPromiseExit(
             handle!.coordinator.searchDocuments({ query: "CONTEXTFRAMEAUDIT", limit: 5 }),
           )
-          if (Exit.isSuccess(ready) && ready.value.hits.some((hit) => hit.document.path === "README.md")) return
-          await Bun.sleep(25)
-        }
-        throw new Error("production document index did not become ready")
-      })
+          return Exit.isSuccess(ready) && ready.value.hits.some((hit) => hit.document.path === "README.md")
+            ? true
+            : undefined
+        }),
+        "production document index did not become ready",
+        "10 seconds",
+      )
       const built = yield* Layer.build(
         V2RunnerFrame.runnerFrameSeamFor(
           { directory: AbsolutePath.make(workspace) },
