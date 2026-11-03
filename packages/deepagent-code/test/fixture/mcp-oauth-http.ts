@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { McpOAuthCallback } from "../../src/mcp/oauth-callback"
+import { serve } from "./http-server"
 
 /** The SDK, provider and credential file are real. Only desktop opening is separately replaced
  * by browser-event tests, so these fixtures never launch the user's browser or external account. */
@@ -7,13 +8,11 @@ export const oauthHttp = Effect.gen(function* () {
   const control: { open: boolean; resourcesOnly: boolean } = { open: false, resourcesOnly: false }
   const methods: string[] = []
   const requests: string[] = []
-  const callback = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
-  const callbackPort = callback.port!
-  yield* Effect.promise(() => callback.stop(true))
-  const listener = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch: async (request) => {
+  const callback = yield* Effect.promise(() => serve(() => new Response()))
+  const callbackPort = callback.port
+  yield* Effect.promise(() => callback.stop())
+  const listener = yield* Effect.promise(() =>
+    serve(async (request) => {
       const url = new URL(request.url)
       requests.push(`${request.method} ${url.pathname}`)
       if (url.pathname.includes("oauth-protected-resource"))
@@ -56,12 +55,12 @@ export const oauthHttp = Effect.gen(function* () {
                 ? { tools: [] }
                 : {},
       })
-    },
-  })
+    }),
+  )
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
       await McpOAuthCallback.stop()
-      await listener.stop(true)
+      await listener.stop()
     }),
   )
   return {
