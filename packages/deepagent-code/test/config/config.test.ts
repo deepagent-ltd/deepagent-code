@@ -11,7 +11,6 @@ import { ConfigFileWrite } from "@/config/file-write"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 import { InstanceRef } from "../../src/effect/instance-ref"
-import type { InstanceContext } from "../../src/project/instance-context"
 import { Auth } from "../../src/auth"
 import { Account } from "../../src/account/account"
 import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
@@ -20,14 +19,14 @@ import { Npm } from "@deepagent-code/core/npm"
 import { Env } from "../../src/env"
 import {
   provideTmpdirInstance,
+  requireInstance,
   TestInstance,
   tmpdir,
   tmpdirScoped,
-  withTestInstance,
+  disposeAllInstances,
   provideInstanceEffect,
   testInstanceStoreLayer,
 } from "../fixture/fixture"
-import { InstanceRuntime } from "@/project/instance-runtime"
 import { InstanceStore } from "@/project/instance-store"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
@@ -118,20 +117,13 @@ const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(con
 
 const schemaConfig = (config: object) => ({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...config })
 
-const provideCurrentInstance = <A, E, R>(effect: Effect.Effect<A, E, R>, ctx: InstanceContext) =>
-  effect.pipe(Effect.provideService(InstanceRef, ctx))
-
-const load = (ctx: InstanceContext) =>
-  Effect.runPromise(
-    Config.Service.use((svc) => provideCurrentInstance(svc.get(), ctx)).pipe(Effect.scoped, Effect.provide(layer)),
-  )
 const clearEffect = (wait = false) =>
   Config.use
     .invalidate()
     .pipe(
       Effect.scoped,
       Effect.provide(layer),
-      Effect.andThen(wait ? Effect.promise(() => InstanceRuntime.disposeAllInstances()) : Effect.void),
+      Effect.andThen(wait ? Effect.promise(disposeAllInstances) : Effect.void),
     )
 const clear = (wait = false) => Effect.runPromise(clearEffect(wait))
 // Get managed config directory from environment (set in preload.ts)
@@ -155,12 +147,21 @@ afterEach(async () => {
 const writeManagedSettingsEffect = (settings: object, filename?: string) =>
   FSUtil.use.writeWithDirs(path.join(managedConfigDir, filename ?? "deepagent-code.json"), JSON.stringify(settings))
 
-async function writeConfig(dir: string, config: object, name = "deepagent-code.json") {
-  await Filesystem.write(path.join(dir, name), JSON.stringify(config))
-}
-
 const writeConfigEffect = (dir: string, config: object, name = "deepagent-code.json") =>
   FSUtil.use.writeWithDirs(path.join(dir, name), JSON.stringify(config))
+
+const tmpGlobalConfig = () =>
+  process.platform !== "win32"
+    ? tmpdirScoped()
+    : Effect.acquireRelease(
+        Effect.promise(async () => {
+          // The source Settings fixture only observes absent private files inside this test home.
+          const home = process.env.DEEPAGENT_CODE_TEST_HOME
+          if (!home || !path.isAbsolute(home)) throw new Error("Global config fixture requires an isolated test home")
+          return fs.mkdtemp(path.join(await fs.realpath(home), "global-config-"))
+        }),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      )
 
 const withInstanceDir = <A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
@@ -191,7 +192,7 @@ const withGlobalConfig = <A, E, R>(
   fn: (input: { dir: string }) => Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
-    const dir = yield* tmpdirScoped()
+    const dir = yield* tmpGlobalConfig()
     if (input.config) yield* writeConfigEffect(dir, schemaConfig(input.config), input.name)
     return yield* withGlobalConfigDir(dir, fn({ dir }))
   })
@@ -202,7 +203,7 @@ const withConfigTree = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const root = yield* tmpdirScoped()
-    const global = yield* tmpdirScoped()
+    const global = yield* tmpGlobalConfig()
     const directory = path.join(root, "project")
     yield* Effect.all(
       [
@@ -263,33 +264,20 @@ function withProcessEnvs<A, E, R>(entries: Record<string, string | undefined>, e
   )
 }
 
-async function check(map: (dir: string) => string) {
-  if (process.platform !== "win32") return
-  await using globalTmp = await tmpdir()
-  await using tmp = await tmpdir({ git: true, config: { snapshot: true } })
-  const prev = Global.Path.config
-  ;(Global.Path as { config: string }).config = globalTmp.path
-  await clear()
-  try {
-    await writeConfig(globalTmp.path, {
-      $schema: "https://ai.deepagent.ltd/config.schema.json",
-      snapshot: false,
-    })
-    await withTestInstance({
-      directory: map(tmp.path),
-      fn: async (ctx) => {
-        const cfg = await load(ctx)
-        expect(cfg.snapshot).toBe(true)
-        expect(ctx.directory).toBe(Filesystem.resolve(tmp.path))
-        expect(ctx.project.id).not.toBe(ProjectV2.ID.global)
-      },
-    })
-  } finally {
-    await InstanceRuntime.disposeAllInstances()
-    ;(Global.Path as { config: string }).config = prev
-    await clear()
-  }
-}
+const checkWindowsProjectPath = (map: (dir: string) => string) =>
+  Effect.gen(function* () {
+    if (process.platform !== "win32") return
+    const global = yield* tmpGlobalConfig()
+    const project = yield* tmpdirScoped({ git: true, config: { snapshot: true } })
+    yield* writeConfigEffect(global, schemaConfig({ snapshot: false }))
+    yield* withGlobalConfigDir(global, withInstanceDir(map(project), Effect.gen(function* () {
+      const ctx = yield* requireInstance
+      const cfg = yield* Config.use.get()
+      expect(cfg.snapshot).toBe(true)
+      expect(ctx.directory).toBe(Filesystem.resolve(project))
+      expect(ctx.project.id).not.toBe(ProjectV2.ID.global)
+    })))
+  })
 
 it.instance("loads config with defaults when no files exist", () =>
   Effect.gen(function* () {
@@ -496,17 +484,17 @@ it.instance(
   { config: { lsp: true } },
 )
 
-test("loads project config from Git Bash and MSYS2 paths on Windows", async () => {
+it.effect("loads project config from Git Bash and MSYS2 paths on Windows", () => {
   // Git Bash and MSYS2 both use /<drive>/... paths on Windows.
-  await check((dir) => {
+  return checkWindowsProjectPath((dir) => {
     const drive = dir[0].toLowerCase()
     const rest = dir.slice(2).replaceAll("\\", "/")
     return `/${drive}${rest}`
   })
 })
 
-test("loads project config from Cygwin paths on Windows", async () => {
-  await check((dir) => {
+it.effect("loads project config from Cygwin paths on Windows", () => {
+  return checkWindowsProjectPath((dir) => {
     const drive = dir[0].toLowerCase()
     const rest = dir.slice(2).replaceAll("\\", "/")
     return `/cygdrive/${drive}${rest}`
@@ -704,7 +692,7 @@ it.instance("throws error for invalid JSON", () =>
 
 it.effect("captures invalid JSON in a global config file without wiping other settings", () =>
   Effect.gen(function* () {
-    const globalDir = yield* tmpdirScoped()
+    const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
     // A valid global config alongside a broken one: the good settings must survive and the broken
     // file must be reported via getErrors() so the UI can tell the user *why* it was skipped.
@@ -734,7 +722,7 @@ it.effect("captures invalid JSON in a global config file without wiping other se
 
 it.effect("captures invalid fields in a global config file as a schema error", () =>
   Effect.gen(function* () {
-    const globalDir = yield* tmpdirScoped()
+    const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
     yield* FSUtil.use.writeWithDirs(
       path.join(globalDir, "config.json"),
@@ -762,7 +750,7 @@ it.effect("captures invalid fields in a global config file as a schema error", (
 
 it.effect("consolidates legacy global config files into config.jsonc and removes them", () =>
   Effect.gen(function* () {
-    const globalDir = yield* tmpdirScoped()
+    const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
     // Plugins in one legacy file, model in another — the exact split that confused users.
     yield* FSUtil.use.writeWithDirs(
@@ -805,7 +793,7 @@ it.effect("consolidates legacy global config files into config.jsonc and removes
 
 it.effect("merges legacy keys into an existing .jsonc while preserving its comments", () =>
   Effect.gen(function* () {
-    const globalDir = yield* tmpdirScoped()
+    const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
     yield* FSUtil.use.writeWithDirs(
       path.join(globalDir, "deepagent-code.jsonc"),
@@ -839,7 +827,7 @@ it.effect("merges legacy keys into an existing .jsonc while preserving its comme
 
 it.effect("does not migrate (or delete) legacy files when one is broken", () =>
   Effect.gen(function* () {
-    const globalDir = yield* tmpdirScoped()
+    const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
     yield* FSUtil.use.writeWithDirs(
       path.join(globalDir, "config.json"),
