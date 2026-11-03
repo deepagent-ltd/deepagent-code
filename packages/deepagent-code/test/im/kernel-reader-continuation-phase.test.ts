@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Effect, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -14,7 +15,7 @@ import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 import { pollWithTimeout } from "../lib/effect"
 
 test("a slow original SDK newer page persists older work and lets the next projection finish", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-continuation-phase-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-continuation-phase-"))
   const alphaKey = "b".repeat(64)
   const gammaKey = "c".repeat(64)
   const latency = { alphaNewer: false }

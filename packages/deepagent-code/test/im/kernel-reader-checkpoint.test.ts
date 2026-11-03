@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Effect, Fiber, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -14,7 +15,7 @@ import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 import { pollWithTimeout } from "../lib/effect"
 
 test("original delayed SDK reader checkpoints a bounded slice and refuses a retired owner's late page", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-checkpoint-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-checkpoint-"))
   const latency = { active: false }
   const owner = { current: true }
   const native = KernelLiveFirstSeenFixture.make({ queryDelayMs: (topic) => latency.active ?

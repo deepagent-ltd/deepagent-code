@@ -3,6 +3,7 @@ import { Effect, Exit, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -13,7 +14,7 @@ import { IMKernelReader } from "@/im/kernel/reader"
 import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 
 test("original receiver baseline qualifies the first new projection; cold history and cloned tokens remain refused", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-receiver-baseline-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-receiver-baseline-"))
   const scopeKey = "a".repeat(64)
   const projectionKey = "b".repeat(64)
   const receivers = new Map<string, { version: number; baselineID: string; subscriberID: string; scopeKey: string;

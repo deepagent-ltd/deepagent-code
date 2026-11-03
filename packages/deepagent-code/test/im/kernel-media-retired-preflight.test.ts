@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Effect, Layer, Stream, SubscriptionRef } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
@@ -13,7 +14,7 @@ import { IMKernelSync } from "@/im/kernel/sync"
 import { ReaderInstanceFixture } from "./reader-instance-fixture"
 
 test("the actual fixed Host engine rejects retired identity before attachment lookup or any upload/send port", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-host-media-retired-preflight-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-host-media-retired-preflight-"))
   const clock = { value: Date.now() }
   const calls = { attachment: 0, begin: 0, finalize: 0, send: 0, otherMedia: 0 }
   const config = { appkey: "private-retired-preflight", navigator: "http://127.0.0.1:9", token: "private-controlled-port",

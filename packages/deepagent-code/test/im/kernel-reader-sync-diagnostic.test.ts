@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Effect, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -14,7 +15,7 @@ import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 import { pollWithTimeout } from "../lib/effect"
 
 test("an actual local SQL refusal reports its pass stage without SQL or cause content", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-sync-diagnostic-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-sync-diagnostic-"))
   const native = KernelLiveFirstSeenFixture.make()
   const config = { appkey: `private-sync-diagnostic-${native.server.port}`, navigator: native.server.url.origin,
     token: "private-first-seen-token", userID: "receiver", protectedMedia: false,

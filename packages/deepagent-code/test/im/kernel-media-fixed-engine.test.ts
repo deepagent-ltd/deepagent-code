@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { Effect, Layer, SubscriptionRef } from "effect"
@@ -17,7 +18,7 @@ import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 import { ReaderInstanceFixture } from "./reader-instance-fixture"
 
 test("fixed engine serially completes private media through the official lib, reader request and native SDK slots", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-im-media-fixed-engine-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-im-media-fixed-engine-"))
   const bytes = Buffer.alloc(262144 * 2 + 17, 77)
   const checksum = createHash("sha256").update(bytes).digest("hex")
   const metadata = { objectID: "c".repeat(64), uploadID: "", filename: "private.bin", mime: "",

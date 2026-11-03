@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Effect, Layer, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -14,7 +15,7 @@ import { pollWithTimeout } from "../lib/effect"
 
 
 test("a slow mandatory SDK header cannot starve bounded background discovery", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-header-progress-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-header-progress-"))
   const latency = { active: false }
   const native = KernelLiveFirstSeenFixture.make({ queryDelayMs: (topic) => latency.active && topic === "qry_delivery_reader" ? 1100 : 0 })
   const config = { appkey: `private-header-progress-${native.server.port}`, navigator: native.server.url.origin,

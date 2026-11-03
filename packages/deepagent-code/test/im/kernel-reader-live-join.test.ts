@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Stream, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -22,7 +23,7 @@ const wait = <A, E, R>(effect: Effect.Effect<A | undefined, E, R>) => Effect.gen
 })
 
 test("real WS observations join the in-flight page before first INSERT; history remains immutable", async () => {
-  const directory = await fs.mkdtemp("/tmp/dac-reader-live-join-")
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-reader-live-join-"))
   const native = KernelLiveFirstSeenFixture.make()
   const config = { appkey: `private-first-seen-${native.server.port}`, navigator: native.server.url.origin,
     token: "private-first-seen-token", userID: "receiver", identity: { uuid: "receiver", orgID: 1, name: "Receiver", orgAllGroupID: "unused" } }
