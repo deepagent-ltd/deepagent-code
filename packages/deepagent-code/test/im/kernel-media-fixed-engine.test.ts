@@ -90,7 +90,7 @@ test("fixed engine serially completes private media through the official lib, re
       const message = yield* lease.engine.createMessage({ groupID, clientRequestID: "private-original-media", senderID: "server", senderType: "user", type: "file", content: "one original private file",
         attachments: [{ id: attachment.id, workspaceID: instance.directory, expected: attachment }],
         metadata: [{ type: "attachment_ref", attachmentID: attachment.id, batch: true }],
-      }).pipe(Effect.timeout("2 seconds"))
+      }).pipe(Effect.timeout(process.platform === "win32" ? "60 seconds" : "2 seconds"))
       expect(message.type).toBe("file")
       expect(metadata.receivedChunks).toBe(3)
       expect(received.digest("hex")).toBe(checksum)

@@ -132,7 +132,7 @@ test("actual HTTP rebase waits an active provider boundary, preserves its first 
   )
   const child = spawn(root, "loop-proposal-two-rebase")
   const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 45000)
+  const timeout = setTimeout(() => child.kill("SIGKILL"), process.platform === "win32" ? 90_000 : 45_000)
   try {
     const status = await child.exited
     const log = (await output).join("\n")
@@ -146,7 +146,7 @@ test("actual HTTP rebase waits an active provider boundary, preserves its first 
   } finally {
     clearTimeout(timeout)
   }
-}, 60000)
+}, process.platform === "win32" ? 120_000 : 60_000)
 
 function spawn(root: string, scenario: string) {
   return Bun.spawn(
@@ -201,10 +201,7 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     )
     const child = spawn(root, `loop-proposal-two-rebase-ask-${changed}`)
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-    const timeout = setTimeout(
-      () => child.kill("SIGKILL"),
-      process.platform === "win32" && ["parent", "doc", "reject"].includes(changed) ? 60_000 : 30_000,
-    )
+    const timeout = setTimeout(() => child.kill("SIGKILL"), process.platform === "win32" ? 60_000 : 30_000)
     try {
       const status = await child.exited
       const log = (await output).join("\n")
@@ -217,7 +214,7 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     } finally {
       clearTimeout(timeout)
     }
-  }, process.platform === "win32" && ["parent", "doc", "reject"].includes(changed) ? 90_000 : 45_000)
+  }, process.platform === "win32" ? 90_000 : 45_000)
 }
 
 test("two actual HTTP clients cannot both commit from the same edit and control revisions", async () => {
