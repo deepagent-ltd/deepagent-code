@@ -341,8 +341,8 @@ try {
   $source = Get-Acl -LiteralPath $env:DAC_CONFIG_ACL_SOURCE
   Set-Acl -LiteralPath $env:DAC_CONFIG_ACL_TARGET -AclObject $source
   $target = Get-Acl -LiteralPath $env:DAC_CONFIG_ACL_TARGET
-  $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
-  if ($source.Owner -ne $target.Owner -or $source.GetSecurityDescriptorSddlForm($sections) -ne $target.GetSecurityDescriptorSddlForm($sections)) { exit 1 }
+  # Same-directory replacement can retain target auto-inheritance even when every ACE matches.
+  if ($source.Owner -ne $target.Owner -or $source.Group -ne $target.Group -or $source.AccessToString -ne $target.AccessToString) { exit 1 }
   exit 0
 } catch { exit 1 }
 `
