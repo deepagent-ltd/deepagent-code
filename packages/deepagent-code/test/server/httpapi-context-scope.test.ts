@@ -31,6 +31,7 @@ import { schemaErrorLayer } from "@/server/routes/instance/httpapi/middleware/sc
 
 import { contextHandlers } from "@/server/routes/instance/httpapi/handlers/context"
 import { tmpdir } from "../fixture/fixture"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
 
 test("actual readiness uses the scoped runner sources and refuses a foreign Session before loading its root", async () => {
   await using fixture = await tmpdir()
@@ -51,6 +52,7 @@ test("actual readiness uses the scoped runner sources and refuses a foreign Sess
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
         Layer.mock(BackgroundJob.Service)({}),
+        EmptySettingsFixture.layer,
       )
       const services = Layer.mergeAll(
         common,
@@ -137,14 +139,15 @@ test("actual readiness uses the scoped runner sources and refuses a foreign Sess
           Layer.provide(Layer.succeedContext(built)),
           Layer.provide(HttpServer.layerServices),
         ),
-        { disableLogger: true },
+        { disableLogger: false },
       )
       yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
       const current = yield* Effect.promise(() =>
         web.handler(new Request(`http://localhost/context/readiness?session_id=${currentID}`), built),
       )
-      expect(current.status).toBe(200)
-      const result = yield* Effect.promise(() => current.json())
+      const currentBody = yield* Effect.promise(() => current.text())
+      expect({ status: current.status, body: currentBody }).toMatchObject({ status: 200 })
+      const result = JSON.parse(currentBody)
       expect(result.session_id).toBe(currentID)
       expect(result.statuses.code.status).toBe("ready")
       expect(result.statuses.documents.status).toBe("ready")
