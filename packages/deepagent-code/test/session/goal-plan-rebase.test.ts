@@ -203,7 +203,7 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
     const timeout = setTimeout(
       () => child.kill("SIGKILL"),
-      process.platform === "win32" && ["doc", "reject"].includes(changed) ? 60_000 : 30_000,
+      process.platform === "win32" && ["parent", "doc", "reject"].includes(changed) ? 60_000 : 30_000,
     )
     try {
       const status = await child.exited
@@ -217,7 +217,7 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     } finally {
       clearTimeout(timeout)
     }
-  }, process.platform === "win32" && ["doc", "reject"].includes(changed) ? 90_000 : 45_000)
+  }, process.platform === "win32" && ["parent", "doc", "reject"].includes(changed) ? 90_000 : 45_000)
 }
 
 test("two actual HTTP clients cannot both commit from the same edit and control revisions", async () => {

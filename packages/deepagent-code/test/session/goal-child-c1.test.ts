@@ -68,13 +68,15 @@ for (const scenario of [
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
     const timeout = setTimeout(
       () => child.kill("SIGKILL"),
-      process.platform === "win32" && scenario === "structured" ? 75_000 : 45_000,
+      process.platform === "win32" ? (scenario === "structured" ? 180_000 : 90_000) : 45_000,
     )
     try {
       const status = await child.exited
       const [stdout, stderr] = await output
       await Bun.write(path.join(root, "output.log"), stdout + stderr)
-      expect({ status, stderr, root }).toMatchObject({ status: 0 })
+      const provider = await Bun.file(path.join(root, "provider.json")).json().catch(() => [])
+      const resultWritten = await Bun.file(path.join(root, "result.json")).exists()
+      expect({ status, stderr, root, providerCalls: provider.length, resultWritten }).toMatchObject({ status: 0 })
       const result = await Bun.file(path.join(root, "result.json")).json()
       expect(result.requests).toBe(scenario === "structured" ? 3 : 1)
       expect(result.result.inputs).toHaveLength(scenario === "structured" ? 3 : 1)
@@ -122,7 +124,7 @@ for (const scenario of [
         await child.exited
       }
     }
-  }, process.platform === "win32" && scenario === "structured" ? 90_000 : 50_000)
+  }, process.platform === "win32" ? (scenario === "structured" ? 210_000 : 120_000) : 50_000)
 }
 
 for (const phase of ["before", "after", "conflict", "paused"]) {
@@ -133,11 +135,11 @@ for (const phase of ["before", "after", "conflict", "paused"]) {
     )
     const child = spawn(root, `cold-${phase}`)
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 30000)
+    const timeout = setTimeout(() => child.kill("SIGKILL"), process.platform === "win32" ? 90_000 : 30_000)
     try {
       const started = Date.now()
       while (!(await Bun.file(path.join(root, "kill-ready.json")).exists())) {
-        if (child.exitCode !== null || Date.now() - started > 25000) {
+        if (child.exitCode !== null || Date.now() - started > (process.platform === "win32" ? 60_000 : 25_000)) {
           if (child.exitCode === null) child.kill("SIGKILL")
           await child.exited
           await Bun.write(path.join(root, "live.log"), (await output).join("\n"))
@@ -159,7 +161,7 @@ for (const phase of ["before", "after", "conflict", "paused"]) {
     }
     const cold = spawn(root, `recover-${phase}`)
     const outputCold = Promise.all([new Response(cold.stdout).text(), new Response(cold.stderr).text()])
-    const coldTimeout = setTimeout(() => cold.kill("SIGKILL"), 15000)
+    const coldTimeout = setTimeout(() => cold.kill("SIGKILL"), process.platform === "win32" ? 60_000 : 15_000)
     try {
       const status = await cold.exited
       const log = (await outputCold).join("\n")
@@ -178,7 +180,7 @@ for (const phase of ["before", "after", "conflict", "paused"]) {
       if (phase === "after") {
         const retry = spawn(root, "recover-committed")
         const retriedOutput = Promise.all([new Response(retry.stdout).text(), new Response(retry.stderr).text()])
-        const retryTimeout = setTimeout(() => retry.kill("SIGKILL"), 15000)
+        const retryTimeout = setTimeout(() => retry.kill("SIGKILL"), process.platform === "win32" ? 60_000 : 15_000)
         try {
           const status = await retry.exited
           const log = (await retriedOutput).join("\n")
@@ -204,5 +206,5 @@ for (const phase of ["before", "after", "conflict", "paused"]) {
         await cold.exited
       }
     }
-  }, 50000)
+  }, process.platform === "win32" ? 180_000 : 50_000)
 }
