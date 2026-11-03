@@ -1,6 +1,7 @@
 export * as V2PluginToolsBridge from "./v2-plugin-tools-bridge"
 
-import { Effect, Exit, Layer, Scope, Semaphore } from "effect"
+import { Effect, Exit, Layer, Logger, Scope, Semaphore } from "effect"
+import { logger } from "@deepagent-code/core/effect/logger"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { ToolRegistry } from "@/tool/registry"
 import { InstanceRegistry } from "@/effect/instance-registry"
@@ -11,6 +12,7 @@ import { CustomToolRejections } from "@/tool/custom-tool-rejections"
 // These capabilities retain app-owned services and flags; the Core V2 registry owns their
 // advertised definitions and settlement after this instance-scoped registration.
 const hostToolIDs = new Set(["lsp", "profile", "debug", "query_log"])
+const bridgeLogger = Logger.layer([logger], { mergeWithExisting: false })
 
 /**
  * Instance-owned registration of npm/filesystem plugin and config-glob tools. The V1 registry
@@ -98,6 +100,8 @@ export const layer = Layer.effectDiscard(
               Effect.annotateLogs({ directory: context.directory, cause }),
             ),
           ),
+          // This initializer runs outside AppRuntime. Keep diagnostics off the CLI response stream.
+          Effect.provide(bridgeLogger),
         ),
       ),
     )

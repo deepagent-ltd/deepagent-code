@@ -37,10 +37,21 @@ const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>
 beforeAll(async () => {
   if (process.platform !== "win32" || process.env.DEEPAGENT_CODE_TEST_BINARY) return
   const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
-  const directory = path.join(deepagentCodeRoot, ".artifacts/windows-native-cli-process")
-  await fs.mkdir(directory, { recursive: true })
+  // Native fixture homes double as the CLI working directory. The checkout's
+  // .git would turn a fresh home into part of the source worktree.
+  const runnerTemp = process.env.RUNNER_TEMP
+  const checkout = await fs.realpath(path.resolve(deepagentCodeRoot, "../.."))
+  const directory = await fs.realpath(
+    runnerTemp && path.parse(runnerTemp).root.toUpperCase() === "D:\\" ? runnerTemp : path.dirname(checkout),
+  )
+  if (path.parse(directory).root.toUpperCase() !== "D:\\") throw new Error("Native CLI fixture requires a D: root")
+  const enclosingGit = await FSUtil.use.up({ targets: [".git"], start: directory }).pipe(
+    Effect.provide(FSUtil.defaultLayer),
+    Effect.runPromise,
+  )
+  if (enclosingGit.length) throw new Error("Native CLI fixture root must be outside a Git worktree")
   native.cohort = await WindowsNativeCliCohort.build({
-    directory: await fs.realpath(directory),
+    directory,
     businessEntry: path.join(deepagentCodeRoot, "test/fixture/windows-cli-process-entry.ts"),
     extraSources: [import.meta.path, path.join(deepagentCodeRoot, "test/fixture/cli-secret-store.ts")],
     plugins: [{ name: "owned-cli-secret-store-selection", setup(builder) {
