@@ -115,6 +115,7 @@ const provider = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   requests.push(JSON.parse(Buffer.concat(chunks).toString()))
   await Bun.write(path.join(root, "provider.json"), JSON.stringify(requests))
+  if (scenario === "structured") console.error(`C1_STRUCTURED_PROVIDER ${requests.length}`)
   response.writeHead(200, { "content-type": "text/event-stream" })
   if (scenario === "anthropic") {
     const emit = (event: object) => response.write(`data: ${JSON.stringify(event)}\n\n`)

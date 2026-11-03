@@ -201,7 +201,10 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     )
     const child = spawn(root, `loop-proposal-two-rebase-ask-${changed}`)
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 30000)
+    const timeout = setTimeout(
+      () => child.kill("SIGKILL"),
+      process.platform === "win32" && ["doc", "reject"].includes(changed) ? 60_000 : 30_000,
+    )
     try {
       const status = await child.exited
       const log = (await output).join("\n")
@@ -214,7 +217,7 @@ for (const changed of ["parent", "roster", "doc", "reject"]) {
     } finally {
       clearTimeout(timeout)
     }
-  }, 45000)
+  }, process.platform === "win32" && ["doc", "reject"].includes(changed) ? 90_000 : 45_000)
 }
 
 test("two actual HTTP clients cannot both commit from the same edit and control revisions", async () => {
@@ -224,7 +227,7 @@ test("two actual HTTP clients cannot both commit from the same edit and control 
   )
   const child = spawn(root, "loop-proposal-two-rebase-clients")
   const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 30000)
+  const timeout = setTimeout(() => child.kill("SIGKILL"), process.platform === "win32" ? 60_000 : 30_000)
   try {
     const status = await child.exited
     const log = (await output).join("\n")
@@ -237,7 +240,7 @@ test("two actual HTTP clients cannot both commit from the same edit and control 
   } finally {
     clearTimeout(timeout)
   }
-}, 45000)
+}, process.platform === "win32" ? 90_000 : 45_000)
 
 test("actual standalone CLI reads a literal request file and applies through the authenticated live HTTP owner", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-goal-rebase-cli-")))
@@ -246,7 +249,7 @@ test("actual standalone CLI reads a literal request file and applies through the
   )
   const child = spawn(root, "loop-proposal-two-rebase-cli")
   const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 40000)
+  const timeout = setTimeout(() => child.kill("SIGKILL"), process.platform === "win32" ? 60_000 : 40_000)
   try {
     const status = await child.exited
     const log = (await output).join("\n")
@@ -260,7 +263,7 @@ test("actual standalone CLI reads a literal request file and applies through the
   } finally {
     clearTimeout(timeout)
   }
-}, 55000)
+}, process.platform === "win32" ? 90_000 : 55_000)
 
 for (const window of ["prepare", "file1", "file2", "file3", "commit", "file1-stop"]) {
   test(`actual SIGKILL after rebase ${window}: cold GET writes nothing and exact reconciliation executes zero new inputs/providers`, async () => {

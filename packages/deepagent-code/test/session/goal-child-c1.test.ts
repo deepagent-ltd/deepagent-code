@@ -66,7 +66,10 @@ for (const scenario of [
     )
     const child = spawn(root, scenario)
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 45000)
+    const timeout = setTimeout(
+      () => child.kill("SIGKILL"),
+      process.platform === "win32" && scenario === "structured" ? 75_000 : 45_000,
+    )
     try {
       const status = await child.exited
       const [stdout, stderr] = await output
@@ -119,7 +122,7 @@ for (const scenario of [
         await child.exited
       }
     }
-  }, 50000)
+  }, process.platform === "win32" && scenario === "structured" ? 90_000 : 50_000)
 }
 
 for (const phase of ["before", "after", "conflict", "paused"]) {

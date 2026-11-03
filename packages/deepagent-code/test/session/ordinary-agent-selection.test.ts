@@ -69,7 +69,10 @@ test.each([
         },
       )
       const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
-      const timer = setTimeout(() => child.kill("SIGKILL"), 40_000)
+      const timer = setTimeout(
+        () => child.kill("SIGKILL"),
+        process.platform === "win32" && ["churn", "error"].includes(scenario) ? 60_000 : 40_000,
+      )
       try {
         const status = await child.exited
         if (status !== 0) {

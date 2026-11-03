@@ -42,7 +42,7 @@ import { SessionID } from "@/session/schema"
 const root = process.argv[2]!
 const scenario = process.argv[3]!
 const directory = path.join(root, "project")
-const observed = ["loop", "loop-failed", "steer-valid", "loop-stop", "loop-proposal-two",
+const observed = scenario.startsWith("loop-proposal-two-rebase") || ["loop", "loop-failed", "steer-valid", "loop-stop", "loop-proposal-two",
   "loop-proposal-diagnostics-stale", "loop-cold", "loop-cold-recover", "loop-proposal-two-cold",
   "loop-proposal-two-recover"].includes(scenario)
 const stage = (event: string, details?: Record<string, unknown>) => {

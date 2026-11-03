@@ -234,10 +234,12 @@ try {
     )
   }
 } finally {
+  if (["churn", "error"].includes(scenario)) console.error(`ORDINARY_SELECTION_STAGE ${scenario} result-written`)
   provider.closeAllConnections()
   await new Promise<void>((resolve) => provider.close(() => resolve()))
   await Effect.runPromise(Scope.close(scope, Exit.void))
   await listener?.stop(true)
   await Server.disposeDefault()
   await AppRuntime.dispose()
+  if (["churn", "error"].includes(scenario)) console.error(`ORDINARY_SELECTION_STAGE ${scenario} disposed`)
 }
