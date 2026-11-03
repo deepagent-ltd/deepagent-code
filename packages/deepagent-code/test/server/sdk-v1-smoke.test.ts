@@ -4,10 +4,12 @@
 // for endpoints the v1 SDK was generated against.
 import { afterEach, describe, expect, test } from "bun:test"
 import { createOpencodeClient } from "@deepagent-code/sdk"
-import { Server } from "../../src/server/server"
-import { tmpdir, disposeAllInstances } from "../fixture/fixture"
-import { resetDatabase } from "../fixture/db"
 import * as Log from "@deepagent-code/core/util/log"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { tmpdir, disposeAllInstances } = await import("../fixture/fixture")
+const { resetDatabase } = await import("../fixture/db")
 
 void Log.init({ print: false })
 

@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import path from "path"
 import { pathToFileURL } from "url"
-import { tmpdir, withTestInstance } from "../fixture/fixture"
-import { LSPClient } from "@/lsp/client"
-import * as LSPServer from "@/lsp/server"
+import type { Handle } from "@/lsp/server"
 import * as Log from "@deepagent-code/core/util/log"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { tmpdir, withTestInstance } = await import("../fixture/fixture")
+const { LSPClient } = await import("@/lsp/client")
 
 function spawnFakeServer() {
   const { spawn } = require("child_process")
@@ -29,7 +31,7 @@ describe("LSPClient interop", () => {
       fn: (ctx) =>
         LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: process.cwd(),
           directory: process.cwd(),
           instance: ctx,
@@ -53,7 +55,7 @@ describe("LSPClient interop", () => {
       fn: (ctx) =>
         LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: process.cwd(),
           directory: process.cwd(),
           instance: ctx,
@@ -77,7 +79,7 @@ describe("LSPClient interop", () => {
       fn: (ctx) =>
         LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: process.cwd(),
           directory: process.cwd(),
           instance: ctx,
@@ -101,7 +103,7 @@ describe("LSPClient interop", () => {
       fn: (ctx) =>
         LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: process.cwd(),
           directory: process.cwd(),
           instance: ctx,
@@ -130,7 +132,7 @@ describe("LSPClient interop", () => {
         LSPClient.create({
           serverID: "fake",
           server: {
-            ...(handle as unknown as LSPServer.Handle),
+            ...(handle as unknown as Handle),
             initialization,
           },
           root: process.cwd(),
@@ -159,7 +161,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -203,7 +205,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -250,7 +252,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -298,7 +300,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -347,7 +349,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -401,7 +403,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,
@@ -466,7 +468,7 @@ describe("LSPClient interop", () => {
       fn: async (ctx) => {
         const client = await LSPClient.create({
           serverID: "fake",
-          server: handle as unknown as LSPServer.Handle,
+          server: handle as unknown as Handle,
           root: tmp.path,
           directory: tmp.path,
           instance: ctx,

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { spawn } from "node:child_process"
-import { LSPClient } from "@/lsp/client"
-import { tmpdir, withTestInstance } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { LSPClient } = await import("@/lsp/client")
+const { tmpdir, withTestInstance } = await import("../fixture/fixture")
 
 const fixture = path.join(import.meta.dir, "fixture/owned-diagnostics-server.ts")
 for (const mode of ["push", "pull", "stale", "unversioned", "hold"]) {
