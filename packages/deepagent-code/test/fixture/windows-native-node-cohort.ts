@@ -3,7 +3,7 @@ export * as WindowsNativeNodeCohort from "./windows-native-node-cohort"
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createHash, createPrivateKey, createPublicKey } from "node:crypto"
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { Schema } from "effect"
@@ -24,7 +24,7 @@ const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest(
 
 /** A test-only publisher and the original desktop-sidecar protocol. No capture,
  * Current reference, DPAPI codec or production owner material is injected. */
-export async function build(input: { directory: string; nodeEntry: string }) {
+export async function build(input: { directory: string; nodeEntry: string; tamper?: { field: "runtime" | "executable"; sha256: string } }) {
   if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch))
     throw new Error("The Native Node cohort requires its actual Windows target")
   assert(path.isAbsolute(input.directory) && path.isAbsolute(input.nodeEntry))
@@ -53,6 +53,7 @@ export async function build(input: { directory: string; nodeEntry: string }) {
         privateKeyFile: publisher.privateKeyFile,
         publicKeyFile: publisher.publicKeyFile,
         toolchain,
+        tamper: input.tamper,
       }),
       { flag: "wx", mode: 0o600 },
     )
@@ -175,6 +176,7 @@ async function assemble(input: {
   privateKeyFile: string
   publicKeyFile: string
   toolchain: Awaited<ReturnType<typeof captureToolchain>>
+  tamper?: { field: "runtime" | "executable"; sha256: string }
 }) {
   const chunks = path.join(input.root, "main", "chunks")
   await fs.mkdir(chunks, { recursive: true })
@@ -280,6 +282,14 @@ async function assemble(input: {
     )
     assert.equal(issued.code, 0, `Physical Node publisher failed: ${JSON.stringify(issued)}`)
   })
+  if (input.tamper) {
+    const manifest = await Bun.file(`${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`).json() as NativeInstallationSchema.NodeManifest
+    const payload = new NativeInstallationSchema.NodePayload({ ...manifest.payload,
+      [input.tamper.field]: new NativeInstallationSchema.Executable({ ...manifest.payload[input.tamper.field], sha256: input.tamper.sha256 }) })
+    const privateKey = createPrivateKey(await fs.readFile(input.privateKeyFile))
+    await fs.writeFile(`${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`, CanonicalJson.stringify(new NativeInstallationSchema.NodeManifest({ payload,
+      signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), privateKey).toString("hex") })))
+  }
   for (const entry of [mainEntry, sidecarEntry]) {
     const built = await Bun.build({
       entrypoints: [entry],
