@@ -20,7 +20,7 @@ const frame = (value: unknown) => {
   const size = Buffer.alloc(4); size.writeUInt32BE(body.length)
   return Buffer.concat([size, body])
 }
-test("partial cleanup retains foreign files and refuses a closed directory descriptor", async () => {
+it("partial cleanup retains foreign files and refuses a closed directory descriptor", async () => {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-command-preparation-")))
   const root = path.join(directory, "project")
   await fs.mkdir(root, { mode: 0o700 })
