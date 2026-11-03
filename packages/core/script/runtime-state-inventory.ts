@@ -4595,6 +4595,15 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "im-kernel",
     verdict: "safe_scoped",
   },
+  "packages/core/src/database/preflight.ts:recentActiveOwners": {
+    owner: "DatabasePreflight.process-diagnostics",
+    keyScope: "database-filename",
+    bound: "64-filenames-and-15-second-freshness",
+    finalizer: "read-expiry-successful-read-non-busy-error-and-oldest-eviction",
+    durability: "transient-owner-evidence-only-never-activeProcess-or-durable-authority",
+    reachability: "read-only-database-preflight",
+    verdict: "safe_bounded",
+  },
   "packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs": {
     owner: "EffectFlock.process",
     keyScope: "lock-root-constant",

@@ -142,6 +142,7 @@ const SQLITE_HEADER_MAGIC = "SQLite format 3\x00"
 const HEADER_MAGIC_BYTES = Uint8Array.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
 
 // A released runtime lease can leave SQLite busy into the next bootstrap retry.
+// Bound diagnostic evidence by filename count and freshness; reads and non-BUSY errors invalidate it.
 const recentActiveOwners = new Map<string, number>()
 const ownerRecentlyActive = (filename: string) => {
   const observedAt = recentActiveOwners.get(filename)
@@ -316,7 +317,9 @@ const probesForReadOnly = (
       const lockDir = `${filename}.runtime.lock`
       const active = await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 15_000 })
       if (active) {
+        recentActiveOwners.delete(filename)
         recentActiveOwners.set(filename, Date.now())
+        if (recentActiveOwners.size > 64) recentActiveOwners.delete(recentActiveOwners.keys().next().value!)
         // "Someone holds the database" is undiagnosable without the holder's identity — surface
         // the lock metadata (pid/hostname/created) so the culprit process is immediately findable.
         const meta = await fs.readFile(path.join(lockDir, "meta.json"), "utf8").catch(() => undefined)
