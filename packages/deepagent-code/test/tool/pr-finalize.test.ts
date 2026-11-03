@@ -69,6 +69,7 @@ import { testEffect } from "../lib/effect"
 // Redirect the deterministic worktree layout's data root into scratch space for this file.
 const tmpBase = realpathSync(mkdtempSync(path.join(tmpdir(), "pr-finalize-")))
 const dataRoot = path.join(tmpBase, "data")
+await fs.mkdir(dataRoot, { recursive: true })
 const priorTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
 const priorDataHome = process.env.DEEPAGENT_CODE_HOME
 process.env.DEEPAGENT_CODE_TEST_HOME = dataRoot
@@ -111,6 +112,7 @@ function expectExit0(proc: ReturnType<typeof gitIn>, what: string) {
 const makeRepo = async (root: string) => {
   await fs.mkdir(root, { recursive: true })
   expectExit0(gitIn(root, ["init", "-b", "main"]), "git init")
+  expectExit0(gitIn(root, ["config", "core.autocrlf", "false"]), "git core.autocrlf")
   gitIn(root, ["config", "user.email", "test@deepagent.local"])
   gitIn(root, ["config", "user.name", "DeepAgent Test"])
   await fs.writeFile(`${root}/README.md`, "# fixture repo\n")

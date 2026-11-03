@@ -18,6 +18,12 @@ const git = async (args: string[], cwd: string): Promise<{ code: number; stdout:
   return { code, stdout }
 }
 
+const worktreePaths = (stdout: string) =>
+  stdout
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.normalize(line.slice("worktree ".length)))
+
 const cleanupDirs: string[] = []
 afterEach(async () => {
   for (const d of cleanupDirs.splice(0)) await fs.rm(d, { recursive: true, force: true }).catch(() => {})
@@ -27,6 +33,7 @@ const makeRepo = async (): Promise<string> => {
   const dir = await tmpRootSharedAsync()
   cleanupDirs.push(dir)
   await git(["init", "-b", "main"], dir)
+  await git(["config", "core.autocrlf", "false"], dir)
   await git(["config", "user.email", "test@test.dev"], dir)
   await git(["config", "user.name", "test"], dir)
   await fs.writeFile(path.join(dir, "seed.txt"), "seed\n")
@@ -50,7 +57,7 @@ describe("agent-worktree (§C3.2 / P4.5a)", () => {
     // dedicated branch, listed as a git worktree of the repo
     expect(wt.branch.startsWith("agent/")).toBe(true)
     const list = await git(["worktree", "list", "--porcelain"], repo)
-    expect(list.stdout.includes(wt.directory)).toBe(true)
+    expect(worktreePaths(list.stdout)).toContain(path.normalize(wt.directory))
     await cleanupAgentWorktree(wt)
   })
 
@@ -134,6 +141,8 @@ describe("agent-worktree (§C3.2 / P4.5a)", () => {
 
     expect(await cleanupAgentWorktree(wt)).toBeNull()
     expect((await git(["branch", "--list", wt.branch], repo)).stdout).toContain(wt.branch)
-    expect((await git(["worktree", "list", "--porcelain"], repo)).stdout).toContain(wt.directory)
+    expect(worktreePaths((await git(["worktree", "list", "--porcelain"], repo)).stdout)).toContain(
+      path.normalize(wt.directory),
+    )
   })
 })
