@@ -5,12 +5,17 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import type { FileHandle } from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { createHmac, randomBytes } from "node:crypto"
-import { Cause, Context, Effect, Layer, Option, Semaphore } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Scope, Semaphore } from "effect"
 import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import { sql } from "drizzle-orm"
 
-const installation = await fs.realpath(await fs.mkdtemp("/tmp/dac-work-source-lifecycle-"))
+if (process.env.DAC_NATIVE_NODE_COHORT_ROOT) {
+  const { NativeWindowsBootstrap } = await import("../../../src/installation/windows-native-bootstrap")
+  await NativeWindowsBootstrap.installFixedEntry()
+}
+const installation = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-work-source-lifecycle-")))
 process.env.DEEPAGENT_CODE_TEST_HOME = installation
 await import("@deepagent-code/core/session")
 const { RestrictedRunnerFixture } = await import("../../../../core/test/fixture/restricted-runner")
@@ -35,6 +40,23 @@ const { CanonicalJson } = await import("@deepagent-code/core/util/canonical-json
 const { Hash } = await import("@deepagent-code/core/util/hash")
 const { LocalAuthority } = await import("../../../src/installation/local-authority")
 const { WorkLeafProof } = await import("../../../src/installation/work-leaf-proof")
+const nativeBootstrap = !process.env.DAC_NATIVE_NODE_COHORT_ROOT
+  ? undefined
+  : await import("../../../src/installation/windows-native-bootstrap")
+const nativeInstallation = !process.env.DAC_NATIVE_NODE_COHORT_ROOT
+  ? undefined
+  : await import("../../../src/installation/native-installation")
+const native = !nativeBootstrap || !nativeInstallation
+  ? Layer.empty
+  : Layer.unwrap(Effect.gen(function* () {
+      const { NativeWindowsBootstrap } = nativeBootstrap
+      const { NativeInstallation } = nativeInstallation
+      return Layer.succeed(NativeWindowsBootstrap.Service,
+        yield* NativeWindowsBootstrap.make(yield* NativeInstallation.current()))
+    }))
+const scope = await Effect.runPromise(Scope.make())
+const nativeContext = await Effect.runPromise(Layer.buildWithScope(native, scope))
+const available = Layer.succeedContext(nativeContext)
 
 const mode = process.argv[2] ?? "complete"
 assert(["complete", "revoked", "retired"].includes(mode))
@@ -72,8 +94,9 @@ const dependencies = Layer.mergeAll(files,
   Layer.succeed(PermissionV2.Service, { assert: () => Effect.void, ask: ordinary, reply: ordinary,
     get: ordinary, forSession: ordinary, list: ordinary }),
   ToolRegistry.defaultLayer,
+  available,
 )
-await Effect.runPromise(LocalAuthority.initializeInstallation())
+await Effect.runPromise(LocalAuthority.initializeInstallation().pipe(Effect.provide(available), Effect.scoped))
 const registry = Layer.mergeAll(dependencies, ReadTool.layer.pipe(Layer.provide(dependencies)))
 const definitionHash = await Effect.runPromise(Effect.gen(function* () {
   const materialized = yield* (yield* ToolRegistry.Service).materialize()
@@ -186,8 +209,9 @@ try {
     freshRequests: fixture.observed.sourceFreshRequests.filter(Boolean).length,
     defaultRequests: fixture.observed.sourceFreshRequests.filter((fresh) => !fresh).length, ...state,
     fileDB: fixture.filename, originalReader: "controlled semaphore and actual SQL read", acceptance: false }
-  await Bun.write(path.join(fixture.root, "source-lifecycle-safe.json"), JSON.stringify(output, null, 2))
+  await fs.writeFile(path.join(fixture.root, "source-lifecycle-safe.json"), JSON.stringify(output, null, 2))
   console.info("WORK_SOURCE_LIFECYCLE_RESULT", JSON.stringify(output))
 } finally {
   await fixture.close()
+  await Effect.runPromise(Scope.close(scope, Exit.void))
 }
