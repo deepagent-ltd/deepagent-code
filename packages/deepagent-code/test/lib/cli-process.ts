@@ -317,7 +317,8 @@ export function withCliFixture<A, E>(
 
     const spawn = Effect.fn("deepagentCode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
-      const timeoutMs = opts?.timeoutMs ?? 30_000
+      // Native CLI cold starts include real migration and image verification on Windows CI.
+      const timeoutMs = opts?.timeoutMs ?? (process.platform === "win32" ? 60_000 : 30_000)
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
