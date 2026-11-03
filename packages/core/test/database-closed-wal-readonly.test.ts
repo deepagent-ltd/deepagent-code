@@ -211,6 +211,71 @@ test("an active owner with WAL arriving before the closed-file stamp stays owner
   }
 })
 
+test("ordinary SQLITE_BUSY after a recent owner releases stays retryable, never masks other failures", async () => {
+  const filename = await fixture("released-owner-busy")
+  const lock = await Effect.runPromise(DatabaseMigrationLease.acquireProcessLock(filename + ".runtime.lock"))
+  const contended = await DatabasePreflight.withReadOnlyPreflight(
+    options(filename),
+    () => { throw new Error("A competing owner must fence inspection") },
+    (result) => result,
+  ).finally(() => Effect.runPromise(lock.release))
+  if (contended.ok) throw new Error("owner refusal required")
+  expect(contended.issues.map((issue) => issue.code)).toEqual(["another_process_active"])
+  const writer = new Database(filename)
+  writer.run("INSERT INTO migration VALUES('m2',2)")
+  const query = spyOn(Database.prototype, "query").mockImplementation(() => {
+    throw Object.assign(new Error("database is busy"), { code: "SQLITE_BUSY", errno: 5 })
+  })
+  try {
+    const result = await DatabasePreflight.withReadOnlyPreflight(
+      { ...options(filename), knownMigrationIds: ["m1", "m2"] },
+      (result) => result,
+      (result) => result,
+    )
+    if (result.ok) throw new Error("contention refusal required")
+    expect(result.issues.map((issue) => issue.code)).toEqual(["another_process_active"])
+    expect(result.observations.activeProcess).toBe(false)
+    expect(result.observations.dbInspectionDeferred).toBe("active_owner")
+    query.mockImplementation(() => {
+      throw Object.assign(new Error("database disk image is malformed"), { code: "SQLITE_NOTADB", errno: 11 })
+    })
+    const damaged = await DatabasePreflight.withReadOnlyPreflight(
+      { ...options(filename), knownMigrationIds: ["m1", "m2"] },
+      (result) => result,
+      (result) => result,
+    )
+    if (damaged.ok) throw new Error("open failure required")
+    expect(damaged.issues.map((issue) => issue.code)).toEqual(["db_open_failed"])
+    expect(damaged.observations.dbInspectionDeferred).toBeUndefined()
+  } finally {
+    query.mockRestore()
+    writer.close()
+  }
+})
+
+test("ordinary SQLITE_BUSY without owner evidence remains db_open_failed", async () => {
+  const filename = await fixture("unowned-busy")
+  const writer = new Database(filename)
+  writer.run("INSERT INTO migration VALUES('m2',2)")
+  const query = spyOn(Database.prototype, "query").mockImplementation(() => {
+    throw Object.assign(new Error("database is busy"), { code: "SQLITE_BUSY", errno: 5 })
+  })
+  try {
+    const result = await DatabasePreflight.withReadOnlyPreflight(
+      { ...options(filename), knownMigrationIds: ["m1", "m2"] },
+      (result) => result,
+      (result) => result,
+    )
+    if (result.ok) throw new Error("open failure required")
+    expect(result.issues.map((issue) => issue.code)).toEqual(["db_open_failed"])
+    expect(result.observations.activeProcess).toBe(false)
+    expect(result.observations.dbInspectionDeferred).toBeUndefined()
+  } finally {
+    query.mockRestore()
+    writer.close()
+  }
+})
+
 test("closed WAL with a second hard link refuses inspection without creating sidecars or acquiring a lease", async () => {
   const filename = await fixture("hardlinked")
   await fs.link(filename, filename + ".alias")

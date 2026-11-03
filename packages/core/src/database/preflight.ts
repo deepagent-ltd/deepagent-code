@@ -100,7 +100,7 @@ export interface PreflightObservations {
   pageCount: number | null
   journalMode: string | null
   dbReadable: boolean
-  /** A valid closed-WAL file was not opened because its original runtime owner is active. */
+  /** Inspection was deferred to a runtime owner active in the current bootstrap retry window. */
   dbInspectionDeferred?: "active_owner"
   journalRows: JournalRow[]
   capabilities: CapabilityRow[]
@@ -141,7 +141,20 @@ export interface PreflightProbes {
 const SQLITE_HEADER_MAGIC = "SQLite format 3\x00"
 const HEADER_MAGIC_BYTES = Uint8Array.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
 
-const readConnection = (filename: string, immutable = false): Database | null => {
+// A released runtime lease can leave SQLite busy into the next bootstrap retry.
+const recentActiveOwners = new Map<string, number>()
+const ownerRecentlyActive = (filename: string) => {
+  const observedAt = recentActiveOwners.get(filename)
+  if (observedAt === undefined) return false
+  if (Date.now() - observedAt <= 15_000) return true
+  recentActiveOwners.delete(filename)
+  return false
+}
+const isOrdinarySqliteBusy = (error: unknown) =>
+  typeof error === "object" && error !== null && "code" in error && error.code === "SQLITE_BUSY" &&
+  "errno" in error && error.errno === 5
+
+const readConnection = (filename: string, immutable = false, failures?: unknown[]): Database | null => {
   // Physical read-only is part of the preflight authority boundary. If a WAL database cannot be
   // inspected without creating SHM or otherwise opening writable, the preflight must fail closed;
   // silently upgrading this connection to read-write would mutate the store before compatibility
@@ -151,19 +164,21 @@ const readConnection = (filename: string, immutable = false): Database | null =>
     db.run("PRAGMA query_only = ON")
     return db
   } catch (error) {
+    failures?.push(error)
     observeOwnedSqliteFailure(filename, "connection", error, immutable)
     return null
   }
 }
 
-const inspectReadOnly = async <T>(filename: string, inspect: (db: Database) => T, immutable = false): Promise<T | null> => {
-  const db = readConnection(filename, immutable)
+const inspectReadOnly = async <T>(filename: string, inspect: (db: Database) => T, immutable = false, failures?: unknown[]): Promise<T | null> => {
+  const db = readConnection(filename, immutable, failures)
   if (!db) return null
   try {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         return inspect(db)
       } catch (error) {
+        failures?.push(error)
         observeOwnedSqliteFailure(filename, "inspection", error, immutable, attempt)
         // Only another process's transient WAL recovery can repeat this entire read.
         if (immutable !== false || !error || typeof error !== "object" || !("code" in error) ||
@@ -178,8 +193,11 @@ const inspectReadOnly = async <T>(filename: string, inspect: (db: Database) => T
   }
 }
 
-const probesForReadOnly = (closed?: { filename: string; assertCurrent: () => Promise<void> }): PreflightProbes => {
-  const inspect = <T>(filename: string, use: (db: Database) => T) => inspectReadOnly(filename, use, closed !== undefined)
+const probesForReadOnly = (
+  closed?: { filename: string; assertCurrent: () => Promise<void> },
+  failures?: unknown[],
+): PreflightProbes => {
+  const inspect = <T>(filename: string, use: (db: Database) => T) => inspectReadOnly(filename, use, closed !== undefined, failures)
   return {
     async stat(filename) {
       try {
@@ -298,6 +316,7 @@ const probesForReadOnly = (closed?: { filename: string; assertCurrent: () => Pro
       const lockDir = `${filename}.runtime.lock`
       const active = await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 15_000 })
       if (active) {
+        recentActiveOwners.set(filename, Date.now())
         // "Someone holds the database" is undiagnosable without the holder's identity — surface
         // the lock metadata (pid/hostname/created) so the culprit process is immediately findable.
         const meta = await fs.readFile(path.join(lockDir, "meta.json"), "utf8").catch(() => undefined)
@@ -389,7 +408,7 @@ export const analyzePreflight = (
   // An owner-deferred observation is not a failed SQLite open. Other known blockers
   // still run below, and an actual/unclassified read failure remains a hard blocker.
   if (observations.exists && observations.size > 0 && !observations.dbReadable &&
-    !(observations.dbInspectionDeferred === "active_owner" && observations.activeProcess))
+    observations.dbInspectionDeferred !== "active_owner")
     issues.push({
       code: "db_open_failed",
       message: "unable to open database read-only: " + observations.filename,
@@ -506,7 +525,7 @@ export const analyzePreflight = (
       resource: observations.filename,
     })
 
-  if (observations.activeProcess)
+  if (observations.activeProcess || observations.dbInspectionDeferred === "active_owner")
     issues.push({
       code: "another_process_active",
       message: "another process holds the database; migration is fenced",
@@ -593,15 +612,24 @@ export const withReadOnlyPreflight = async <A,>(
 ): Promise<A> => {
   // Even SQLITE_OPEN_READONLY can create WAL/SHM in a writable directory. Select the
   // fenced closed-file path before opening SQLite, while live WAL keeps ordinary RO.
-  const observations = await gatherObservations(options, probes ?? defaultProbes, probes !== undefined)
+  const failures: unknown[] = []
+  const observations = await gatherObservations(options, probes ?? probesForReadOnly(undefined, failures), probes !== undefined)
   observeOwnedPreflight(options, "observed", observations)
   const original = analyzePreflight(options, observations)
   if (probes || !observations.exists || observations.size === 0) return use(original, options.filename)
   if (!observations.sqliteHeaderValid || !observations.localFilesystem) return unavailable(original)
   if (observations.walExists || observations.shmExists || observations.journalMode === "delete") {
     observeOwnedPreflight(options, "ordinary-read", observations)
-    const ordinary = await gatherObservations(options, defaultProbes)
+    const ordinary = await gatherObservations(options, probesForReadOnly(undefined, failures))
     observeOwnedPreflight(options, "ordinary-observations", ordinary)
+    if (failures.some((error) => !isOrdinarySqliteBusy(error))) recentActiveOwners.delete(options.filename)
+    if (ordinary.journalMode === "wal" && (ordinary.walExists || ordinary.shmExists) && !ordinary.dbReadable &&
+      failures.length > 0 && failures.every(isOrdinarySqliteBusy) && ownerRecentlyActive(options.filename)) {
+      const current = { ...ordinary, dbInspectionDeferred: "active_owner" as const }
+      observeOwnedPreflight(options, "active-owner", current)
+      return use(analyzePreflight(options, current), options.filename)
+    }
+    if (ordinary.dbReadable && !ordinary.activeProcess) recentActiveOwners.delete(options.filename)
     return use(analyzePreflight(options, ordinary), options.filename)
   }
   if (observations.journalMode !== "wal") return unavailable(original)
@@ -658,6 +686,7 @@ export const withReadOnlyPreflight = async <A,>(
       observeOwnedPreflight(options, "inspection-refused", observations)
       return unavailable(original)
     }
+    if (current.observations.dbReadable) recentActiveOwners.delete(options.filename)
     observeOwnedPreflight(options, "inspection-ready", current.observations)
     const uri = pathToFileURL(options.filename)
     uri.searchParams.set("mode", "ro")
