@@ -1,4 +1,4 @@
-import { afterAll, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { LLMClient, LLMEvent, Model, type LLMClientShape } from "@deepagent-code/llm"
 import { and, eq } from "drizzle-orm"
@@ -66,20 +66,8 @@ import { testEffect } from "../lib/effect"
 // crash-retry converging. The runner harness mirrors test/tool/task-v2-authority.test.ts (one
 // fake text turn per drain; the reviewer verdict JSON rides the prose).
 
-// Redirect the deterministic worktree layout's data root into scratch space for this file.
+// The package preload owns the isolated data root; this file only creates its fixture repository.
 const tmpBase = realpathSync(mkdtempSync(path.join(tmpdir(), "pr-finalize-")))
-const dataRoot = path.join(tmpBase, "data")
-await fs.mkdir(dataRoot, { recursive: true })
-const priorTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
-const priorDataHome = process.env.DEEPAGENT_CODE_HOME
-process.env.DEEPAGENT_CODE_TEST_HOME = dataRoot
-process.env.DEEPAGENT_CODE_HOME = dataRoot
-afterAll(() => {
-  if (priorTestHome === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
-  else process.env.DEEPAGENT_CODE_TEST_HOME = priorTestHome
-  if (priorDataHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
-  else process.env.DEEPAGENT_CODE_HOME = priorDataHome
-})
 
 // Every provider turn returns prose embedding a JSON payload (the reviewer verdict).
 let payloadJson = '{"verdict":"approve","rationale":"No findings."}'

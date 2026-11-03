@@ -5,6 +5,9 @@ import path from "node:path"
 import os from "node:os"
 import type { Marker } from "./fixture/personal-dac-cold-process"
 
+const processBudget = process.platform === "win32" ? 30_000 : 20_000
+const testBudget = process.platform === "win32" ? 75_000 : 45_000
+
 async function run(cut: "admission" | "collector") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `dac-personal-physical-${cut}-`))
   const home = path.join(root, "home")
@@ -24,12 +27,12 @@ async function run(cut: "admission" | "collector") {
   const warmStdout = new Response(warm.stdout).text()
   const warmStderr = new Response(warm.stderr).text()
   const warmExit = warm.exited
-  const safety = setTimeout(() => warm.kill(), 20_000)
+  const safety = setTimeout(() => warm.kill(), processBudget)
   try {
     const started = Date.now()
     while (!(await Bun.file(path.join(root, "warm-marker-safe.json")).exists())) {
       if (warm.exitCode !== null) throw new Error(`Warm ${cut} exited ${warm.exitCode}: ${await warmStderr}`)
-      if (Date.now() - started > 18_000) throw new Error(`Warm ${cut} marker deadline`)
+      if (Date.now() - started > processBudget - 2_000) throw new Error(`Warm ${cut} marker deadline`)
       await Bun.sleep(20)
     }
     const marker = await Bun.file(path.join(root, "warm-marker-safe.json")).json() as Marker
@@ -64,7 +67,7 @@ async function run(cut: "admission" | "collector") {
     const afterKill = await fs.stat(filename, { bigint: true })
     expect({ dev: String(afterKill.dev), ino: String(afterKill.ino) }).toEqual(marker.DBIdentity)
     const cold = spawn("cold")
-    const coldTimer = setTimeout(() => cold.kill(), 20_000)
+    const coldTimer = setTimeout(() => cold.kill(), processBudget)
     const result = await Promise.all([cold.exited, new Response(cold.stdout).text(), new Response(cold.stderr).text()])
     clearTimeout(coldTimer)
     await fs.writeFile(path.join(root, "cold-stdout-private.log"), result[1], { mode: 0o600 })
@@ -92,7 +95,7 @@ test("personal DAC physical crash after original prompt admission before command
   expect(value.result).toMatchObject({ cut: "admission", sameDBIdentity: true, commandState: "admitted",
     sessionID: value.proof.marker.sessionID, inputID: value.proof.marker.inputID,
     sessionCount: 1, inputCount: 1, commandCount: 1, promoted: false, promptResumes: [false], additionalWakeCalls: 0, outboxCount: 0 })
-}, 45_000)
+}, testBudget)
 
 test("personal DAC physical crash after fixture durable final pointer before original collector cold-appends one exact reply", async () => {
   const value = await run("collector")
@@ -101,4 +104,4 @@ test("personal DAC physical crash after fixture durable final pointer before ori
     firstCollect: true, secondCollect: false, outboxCount: 1, replySHA256: value.proof.marker.finalSHA256,
     replyBytes: value.proof.marker.finalBytes, privateCommandExcluded: true, custodyKind: "dac_session",
     custodyBindingExact: true, attempts: 0, status: "pending", additionalWakeCalls: 0, transportCreated: false })
-}, 45_000)
+}, testBudget)

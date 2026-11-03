@@ -71,7 +71,7 @@ try {
     }),
   )
 } finally {
-  await server.stop()
+  await server.stop(true)
 }
 process.exit(0)
 
