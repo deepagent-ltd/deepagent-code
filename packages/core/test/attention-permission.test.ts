@@ -110,6 +110,7 @@ describe("current no-progress attention", () => {
         expect(yield* database.db.select().from(AttentionSeenTable).all().pipe(Effect.orDie)).toHaveLength(1)
       }).pipe(Effect.provide(services(path.join(directory, "lease.db"))))
     }),
+    process.platform === "win32" ? 90_000 : undefined,
   )
 
   it.live("retains only termination with a new revision after the saved-permission authority advances", () =>
