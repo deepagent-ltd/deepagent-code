@@ -778,7 +778,7 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         dispatched = true
         const created = await createTab(entry)
         await entry.network?.beginAction(action)
-        if (command.url) await created.contents.loadURL(command.url)
+        if (command.url) await loadTabURL(created, command.url, action.deadline)
         await permit(entry, action)
         if (command.url) renewInputSource(created)
         return { result: { tabs: tabs(entry) } }
@@ -964,7 +964,7 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         if (!sameOrigin(entry, command.url)) fail("BROWSER_NETWORK_DENIED")
         await permit(entry, action)
         dispatched = true
-        await contents.loadURL(command.url)
+        await loadTabURL(tab, command.url, action.deadline)
         await permit(entry, action)
         if (!sameOrigin(entry, contents.getURL())) fail("BROWSER_UNKNOWN")
         renewInputSource(tab)
@@ -1652,6 +1652,22 @@ function destroyTab(tab: ManagedTab): Promise<boolean> {
   tab.clipboardPolicy?.()
   if (!tab.window.isDestroyed()) tab.window.destroy()
   return destroyed.then((confirmed) => confirmed && tab.contents.isDestroyed())
+}
+async function loadTabURL(tab: ManagedTab, url: string, deadline: number) {
+  const contents = tab.contents
+  const prior = contents.getURL() === "about:blank" && tab.inputSource?.status === "available" ? tab.inputSource : undefined
+  await contents.loadURL(url)
+  if (!prior || prior.healthy()) return
+
+  // Chromium can report load and renderer deletion before AppKit detaches the
+  // blank document's Cocoa clients. Only the original view identities can
+  // establish that the handoff is complete before the new source is bound.
+  while (true) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0 || contents.isDestroyed()) fail("BROWSER_CANCELLED")
+    if (prior.originalClientsDetached()) return
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(16, remaining)))
+  }
 }
 function navigateTab(contents: WebContents, dispatch: () => void, deadline: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {

@@ -18,6 +18,7 @@ export declare function observeManagedBrowserInput(input: {
 }): Readonly<{
     status: "available";
     healthy: () => boolean;
+    originalClientsDetached: () => boolean;
     release: () => void;
 }> | {
     readonly status: "unavailable";

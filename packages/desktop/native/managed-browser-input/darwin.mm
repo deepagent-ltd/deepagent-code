@@ -303,6 +303,18 @@ static napi_value healthy(napi_env env, napi_callback_info info) {
   if (watch && !value && NSThread.isMainThread) releaseWatch(watch);
   napi_value result; napi_get_boolean(env, value, &result); return result;
 }
+static napi_value originalClientsDetached(napi_env env, napi_callback_info info) {
+  auto watch = receiver(env, info);
+  NSWindow *window = watch && NSThread.isMainThread ? watch->window : nil;
+  NSView *root = window ? watch->root : nil;
+  // A closed lease retains only weak identities. This query never restores it.
+  const bool detached = window && root && window.contentView == root &&
+    [NSApp.windows indexOfObjectIdenticalTo:window] != NSNotFound &&
+    std::none_of(watch->clients.begin(), watch->clients.end(), [window](const auto& client) {
+      return client.view.window == window;
+    });
+  napi_value result; napi_get_boolean(env, detached, &result); return result;
+}
 static napi_value release(napi_env env, napi_callback_info info) {
   if (!NSThread.isMainThread) { napi_throw_error(env, nullptr, "MANAGED_BROWSER_INPUT_THREAD"); return nullptr; }
   if (auto watch = receiver(env, info)) releaseWatch(watch);
@@ -369,9 +381,10 @@ static napi_value observe(napi_env env, napi_callback_info info) {
   }
   napi_property_descriptor properties[] = {
     {"healthy", nullptr, healthy, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"originalClientsDetached", nullptr, originalClientsDetached, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"release", nullptr, release, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  napi_define_properties(env, lease, 2, properties); napi_object_freeze(env, lease);
+  napi_define_properties(env, lease, 3, properties); napi_object_freeze(env, lease);
   owner->watches.push_back(watch); return lease;
 }
 static napi_value initialize(napi_env env, napi_value exports) {
