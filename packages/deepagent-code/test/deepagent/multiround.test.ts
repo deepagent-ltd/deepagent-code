@@ -303,7 +303,15 @@ describe("A6 multi-round loop (Effect)", () => {
 
 describe("A3 real validation executor", () => {
   test("captures pass/fail from real shell commands", async () => {
-    const results = await runValidationCommands(["true", "false"], "/tmp")
+    const results = await runValidationCommands(
+      [
+        { id: "test:success", source: "user", transport: "argv", executable: process.execPath,
+          args: ["-e", "process.exit(0)"], display: "validation success" },
+        { id: "test:failure", source: "user", transport: "argv", executable: process.execPath,
+          args: ["-e", "process.exit(1)"], display: "validation failure" },
+      ],
+      tmpdir(),
+    )
     expect(results[0]!.passed).toBe(true)
     expect(results[1]!.passed).toBe(false)
     expect(results.length).toBe(2)
@@ -325,7 +333,9 @@ describe("A6 multi-round loop integration", () => {
       const out = yield* maybeRunRounds(
         ops(sessionID, {
           first: "first-bad-turn",
-          validationCommands: [`test "$(cat answer.txt)" = good`],
+          validationCommands: [{ id: "test:answer", source: "user", transport: "argv", executable: process.execPath,
+            args: ["-e", "process.exit(require('node:fs').readFileSync('answer.txt', 'utf8').trim() === 'good' ? 0 : 1)"],
+            display: "validate answer.txt" }],
           track: () => snapshot.track(),
           restore: (checkpoint) => snapshot.restore(checkpoint),
           runValidation: (commands) =>
