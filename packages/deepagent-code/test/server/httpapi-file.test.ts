@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Context } from "effect"
 import path from "path"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
-import { FilePaths } from "../../src/server/routes/instance/httpapi/groups/file"
 import * as Log from "@deepagent-code/core/util/log"
-import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
+const { FilePaths } = await import("../../src/server/routes/instance/httpapi/groups/file")
+const { resetDatabase } = await import("../fixture/db")
+const { disposeAllInstances, tmpdir } = await import("../fixture/fixture")
 
 void Log.init({ print: false })
 

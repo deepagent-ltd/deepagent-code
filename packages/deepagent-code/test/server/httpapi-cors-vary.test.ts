@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import * as Log from "@deepagent-code/core/util/log"
-import { Server } from "../../src/server/server"
-import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { resetDatabase } = await import("../fixture/db")
+const { disposeAllInstances } = await import("../fixture/fixture")
 
 void Log.init({ print: false })
 

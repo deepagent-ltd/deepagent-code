@@ -2,7 +2,9 @@ import { expect, test } from "bun:test"
 import { ConfigProvider, Effect, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
 
 test("actual root event-validation routes preserve authentication and do not grant execution on reads", async () => {
   const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes({ cors: ["https://validation.example"] }).pipe(

@@ -9,8 +9,10 @@ import { Database } from "@deepagent-code/core/database/database"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { testProviderConfig } from "../lib/test-provider"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
 
 describe("gateway release gate", () => {
   test("defaults off with a typed OpenAI 404 for declared and unknown /v1 routes", async () => {

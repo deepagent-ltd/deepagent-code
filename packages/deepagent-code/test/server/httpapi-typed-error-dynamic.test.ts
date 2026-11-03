@@ -8,13 +8,15 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import path from "node:path"
-import { Server } from "../../src/server/server"
-import { CapabilityPaths } from "../../src/server/routes/instance/httpapi/groups/capability"
-import { ContextPaths } from "../../src/server/routes/instance/httpapi/groups/context"
-import { SystemContextPaths } from "../../src/server/routes/instance/httpapi/groups/system-context"
-import { ApiTypedErrors, apiErrorStatus, makeApiError } from "../../src/server/routes/instance/httpapi/typed-error"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { CapabilityPaths } = await import("../../src/server/routes/instance/httpapi/groups/capability")
+const { ContextPaths } = await import("../../src/server/routes/instance/httpapi/groups/context")
+const { SystemContextPaths } = await import("../../src/server/routes/instance/httpapi/groups/system-context")
+const { ApiTypedErrors, apiErrorStatus, makeApiError } = await import("../../src/server/routes/instance/httpapi/typed-error")
+const { disposeAllInstances, tmpdir } = await import("../fixture/fixture")
+const { testEffect } = await import("../lib/effect")
 
 // RI-57: DYNAMIC wire-status oracle for the C0-03 typed-error surface. The static
 // registry→status mapping (httpapi-typed-error.test.ts) and the maintenance shell's

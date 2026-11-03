@@ -1,18 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { PtyID } from "@deepagent-code/core/pty/schema"
-import { Server } from "../../src/server/server"
-import { InstanceRuntime } from "../../src/project/instance-runtime"
-import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import * as Log from "@deepagent-code/core/util/log"
-import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir, tmpdirScoped } from "../fixture/fixture"
 import { Config, Effect, Layer, Queue, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Pty } from "@deepagent-code/core/pty"
-import { testEffect } from "../lib/effect"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { InstanceRuntime } = await import("../../src/project/instance-runtime")
+const { PtyPaths } = await import("../../src/server/routes/instance/httpapi/groups/pty")
+const { resetDatabase } = await import("../fixture/db")
+const { disposeAllInstances, tmpdir, tmpdirScoped } = await import("../fixture/fixture")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
+const { testEffect } = await import("../lib/effect")
 
 void Log.init({ print: false })
 

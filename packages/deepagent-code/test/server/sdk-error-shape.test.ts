@@ -9,10 +9,12 @@
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import { createOpencodeClient } from "@deepagent-code/sdk"
-import { Server } from "../../src/server/server"
 import * as Log from "@deepagent-code/core/util/log"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
-import { resetDatabase } from "../fixture/db"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { disposeAllInstances, tmpdir } = await import("../fixture/fixture")
+const { resetDatabase } = await import("../fixture/db")
 
 void Log.init({ print: false })
 
