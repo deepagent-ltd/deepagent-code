@@ -63,8 +63,14 @@ impl WorkFactory {
         let original = Original { image, proof, imports: RefCell::new(Vec::new()) }; original.current()?;
         let directory = image.bootstrap_path()?.parent().ok_or(io::ErrorKind::Unsupported)?;
         let artifact=proof.artifact_name()?;
-        let receipt = LockedPath::open(&directory.join(format!("{artifact}.native-installation.json")), false, false)?;
-        let inventory = LockedPath::open(&directory.join(format!("{artifact}.native-components.json")), false, false)?;
+        let receipt = LockedPath::open(&directory.join(format!("{artifact}.native-installation.json")), false, false).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE receipt");
+            error
+        })?;
+        let inventory = LockedPath::open(&directory.join(format!("{artifact}.native-components.json")), false, false).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE inventory");
+            error
+        })?;
         loader::require_trusted(&receipt.file)?; loader::require_trusted(&inventory.file)?;
         let stamps = [no_follow::stamp(&receipt.file)?, no_follow::stamp(&inventory.file)?];
         let receipt_bytes = read(&receipt.file, 16_384)?;
@@ -94,14 +100,29 @@ impl WorkFactory {
             Ok(image_factory::Description { path: directory.join(name), identity: no_follow::identity(&held.file)?,
                 sha256: component.sha256.clone(), bytes: component.bytes })
         };
-        let helper = phase("helper-image",Image::open(open(FILES[0])?))?;
-        for name in helper.required_imports(){original.resolve_system_import(name)?;}
-        let factory = phase("command-image-closure",Factory::open_original(&original, open(FILES[1])?, open(FILES[2])?))?;
+        let helper = phase("helper-image",Image::open(open(FILES[0])?)).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE helper-image");
+            error
+        })?;
+        for name in helper.required_imports(){original.resolve_system_import(name).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE system-import");
+            error
+        })?;}
+        let factory = phase("command-image-closure",Factory::open_original(&original, open(FILES[1])?, open(FILES[2])?)).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE command-image-closure");
+            error
+        })?;
         loader::require_trusted(helper.file())?; loader::require_trusted(factory.supervisor().file())?; loader::require_trusted(factory.payload().file())?;
-        let (windows_name,windows_root)=image.original_windows_root()?;
+        let (windows_name,windows_root)=image.original_windows_root().map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE windows-root");
+            error
+        })?;
         let windows_name=windows_name.to_str().ok_or(io::ErrorKind::InvalidData)?;
         let data_path=super::work_workspace::fixed_data_root()?;
-        let data_root=LockedPath::open(&data_path,true,false)?;
+        let data_root=LockedPath::open(&data_path,true,false).map_err(|error| {
+            eprintln!("WORK_FACTORY_STAGE data-root");
+            error
+        })?;
         loader::require_trusted(&data_root.file)?;
         let data_name=data_path.to_str().ok_or(io::ErrorKind::InvalidData)?;
         let windows_environment=format!("DEEPAGENT_WORK_DATA_ROOT={data_name}\0SYSTEMROOT={windows_name}\0WINDIR={windows_name}\0\0").encode_utf16().collect();
@@ -112,7 +133,10 @@ impl WorkFactory {
             if value.len() > 2048 || value.chars().any(char::is_control) || !std::path::Path::new(&value).is_absolute() {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            let held = LockedPath::open(std::path::Path::new(&value), true, false)?;
+            let held = LockedPath::open(std::path::Path::new(&value), true, false).map_err(|error| {
+                eprintln!("WORK_FACTORY_STAGE profile {name}");
+                error
+            })?;
             loader::require_trusted(&held.file)?;
             Ok((name.to_owned(), value, held))
         }).collect::<io::Result<Vec<_>>>()?;

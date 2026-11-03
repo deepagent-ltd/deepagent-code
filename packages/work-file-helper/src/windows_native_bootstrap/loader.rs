@@ -57,11 +57,20 @@ impl FirstLoad {
         let snapshot = Snapshot(snapshot);
         let mut entry: MODULEENTRY32W = unsafe { std::mem::zeroed() };
         entry.dwSize = size_of::<MODULEENTRY32W>() as u32;
-        if unsafe { Module32FirstW(snapshot.0, &mut entry) } == 0 { return Err(io::Error::last_os_error()); }
+        if unsafe { Module32FirstW(snapshot.0, &mut entry) } == 0 {
+            let error = io::Error::last_os_error();
+            eprintln!("WINDOWS_NATIVE_MODULE_FIRST os={}", error.raw_os_error().unwrap_or(0));
+            if error.raw_os_error() == Some(24) { return Err(io::Error::new(io::ErrorKind::WouldBlock, error)); }
+            return Err(error);
+        }
         let mut images = Vec::new();
         loop {
             if images.len() >= 128 { return Err(io::ErrorKind::Unsupported.into()); }
-            let held = module(entry.modBaseAddr.cast())?;
+            let held = module(entry.modBaseAddr.cast()).map_err(|error| {
+                eprintln!("WINDOWS_NATIVE_MODULE_HANDLE os={}", error.raw_os_error().unwrap_or(0));
+                if error.raw_os_error() == Some(24) { return io::Error::new(io::ErrorKind::WouldBlock, error); }
+                error
+            })?;
             let path = module_path(held.0)?;
             let is_system = path.parent().zip(system_name.to_str()).is_some_and(|(parent, name)|
                 parent.to_str().is_some_and(|parent| parent.eq_ignore_ascii_case(name)));
@@ -84,8 +93,11 @@ impl FirstLoad {
                 bytes, sha256: format!("{:x}", hash.finalize()), system: is_system };
             images.push(Image { module: held, path: locked, observed: path, stamp, description });
             if unsafe { Module32NextW(snapshot.0, &mut entry) } == 0 {
-                if io::Error::last_os_error().raw_os_error() != Some(18) { return Err(io::Error::last_os_error()); }
-                break;
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(18) { break; }
+                eprintln!("WINDOWS_NATIVE_MODULE_NEXT count={} os={}", images.len(), error.raw_os_error().unwrap_or(0));
+                if error.raw_os_error() == Some(24) { return Err(io::Error::new(io::ErrorKind::WouldBlock, error)); }
+                return Err(error);
             }
         }
         let own_index = images.iter().position(|image| image.module.0 == own.0).ok_or(io::ErrorKind::PermissionDenied)?;

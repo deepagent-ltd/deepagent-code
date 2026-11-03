@@ -103,9 +103,10 @@ export async function build(input: { directory: string; nodeEntry: string; tampe
     async run(mode = "probe") {
       const metadata = (await Bun.file(path.join(root, "cohort.json")).json()) as { runtime: string }
       const scenario = path.join(root, "runs", crypto.randomUUID())
+      await fs.mkdir(scenario, { recursive: true })
       const result = await execute(
         [metadata.runtime, path.join(root, "main", "main.js"), mode],
-        root,
+        scenario,
         environment(scenario, toolchain.rustupHome),
         "runtime",
         250_000,
@@ -258,6 +259,17 @@ async function assemble(input: {
       "A captured build source changed",
     )
   const desktop = createRequire(path.join(repository, "packages/desktop/package.json"))
+  // Desktop ships these Node sidecar externals, including the Node-ABI PTY selector.
+  await fs.mkdir(path.join(chunks, "node_modules", "@lydell"), { recursive: true })
+  await Promise.all(
+    ["jsonc-parser", "@lydell/node-pty"].map(async (name) =>
+      fs.symlink(
+        await fs.realpath(path.dirname(desktop.resolve(`${name}/package.json`))),
+        path.join(chunks, "node_modules", name),
+        "junction",
+      ),
+    ),
+  )
   const runtime = await fs.realpath(desktop("electron") as string)
   const nodeModule = path.join(chunks, "node.js")
   await phase(input.root, "physical-publisher-start")

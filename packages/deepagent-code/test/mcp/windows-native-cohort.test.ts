@@ -4,7 +4,7 @@ import path from "node:path"
 import { WindowsNativeNodeCohort } from "../fixture/windows-native-node-cohort"
 
 const repository = path.resolve(import.meta.dir, "../../../..")
-const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeNodeCohort.build>> } = {}
+const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeNodeCohort.build>>; failed?: boolean } = {}
 beforeAll(async () => {
   if (process.platform !== "win32") return
   const runner = process.env.RUNNER_TEMP
@@ -20,7 +20,7 @@ beforeAll(async () => {
 }, 240_000)
 
 afterAll(async () => {
-  await state.cohort?.dispose()
+  if (!state.failed) await state.cohort?.dispose()
 })
 
 test(
@@ -41,6 +41,7 @@ test(
     console.info("WINDOWS_NATIVE_COHORT_EVIDENCE", cohort.root)
     console.info("WINDOWS_NATIVE_COHORT_PUBLIC", await Bun.file(path.join(cohort.root, "cohort.json")).json())
     const result = await cohort.run()
+    state.failed = result.code !== 0
     expect(result, JSON.stringify(result)).toMatchObject({ code: 0 })
     expect(await Bun.file(path.join(result.root, "mcp-probe.json")).json()).toEqual({
       nativeInstallation: true,
