@@ -24,6 +24,7 @@ import { createGoalPlanBridge } from "../tui/goal-plan-bridge"
 import { createMcpOperatorBridge } from "../tui/mcp-operator-bridge"
 import { createTaskControlBridge } from "../tui/task-control-bridge"
 import { ServerAuth } from "@/server/auth"
+import { NativeWindowsBootstrap } from "@/installation/windows-native-bootstrap"
 
 declare global {
   const DEEPAGENT_CODE_WORKER_PATH: string
@@ -142,6 +143,8 @@ export const TuiThreadCommand = cmd({
         [DEEPAGENT_CODE_RUN_ID]: ensureRunID(),
       })
 
+      const nativeWorkerMarker = NativeWindowsBootstrap.bindWorker()
+      if (nativeWorkerMarker) env.DAC_NATIVE_PRELOAD_HANDLES = nativeWorkerMarker
       const worker = new Worker(file, {
         env,
       })
@@ -196,6 +199,7 @@ export const TuiThreadCommand = cmd({
         })
         client.close()
         worker.terminate()
+        if (nativeWorkerMarker) NativeWindowsBootstrap.closeWorker(nativeWorkerMarker)
       }
 
       try {

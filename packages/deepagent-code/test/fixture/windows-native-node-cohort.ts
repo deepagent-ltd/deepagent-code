@@ -24,7 +24,11 @@ const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest(
 
 /** A test-only publisher and the original desktop-sidecar protocol. No capture,
  * Current reference, DPAPI codec or production owner material is injected. */
-export async function build(input: { directory: string; nodeEntry: string; tamper?: { field: "runtime" | "executable"; sha256: string } }) {
+export async function build(input: {
+  directory: string
+  nodeEntry: string
+  tamper?: { field: "runtime" | "executable"; sha256: string }
+}) {
   if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch))
     throw new Error("The Native Node cohort requires its actual Windows target")
   assert(path.isAbsolute(input.directory) && path.isAbsolute(input.nodeEntry))
@@ -247,6 +251,7 @@ async function assemble(input: {
     naming: "node.js",
     target: "node",
     format: "esm",
+    conditions: ["node"],
     external: ["@lydell/node-pty", "jsonc-parser", "bun"],
     define: { ...defines, DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(text) },
     files: { "deepagent-code-web-ui.gen.ts": "" },
@@ -295,12 +300,26 @@ async function assemble(input: {
     assert.equal(issued.code, 0, `Physical Node publisher failed: ${JSON.stringify(issued)}`)
   })
   if (input.tamper) {
-    const manifest = await Bun.file(`${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`).json() as NativeInstallationSchema.NodeManifest
-    const payload = new NativeInstallationSchema.NodePayload({ ...manifest.payload,
-      [input.tamper.field]: new NativeInstallationSchema.Executable({ ...manifest.payload[input.tamper.field], sha256: input.tamper.sha256 }) })
+    const manifest = (await Bun.file(
+      `${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`,
+    ).json()) as NativeInstallationSchema.NodeManifest
+    const payload = new NativeInstallationSchema.NodePayload({
+      ...manifest.payload,
+      [input.tamper.field]: new NativeInstallationSchema.Executable({
+        ...manifest.payload[input.tamper.field],
+        sha256: input.tamper.sha256,
+      }),
+    })
     const privateKey = createPrivateKey(await fs.readFile(input.privateKeyFile))
-    await fs.writeFile(`${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`, CanonicalJson.stringify(new NativeInstallationSchema.NodeManifest({ payload,
-      signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), privateKey).toString("hex") })))
+    await fs.writeFile(
+      `${nodeModule}${NativeInstallationSchema.SIDECAR_SUFFIX}`,
+      CanonicalJson.stringify(
+        new NativeInstallationSchema.NodeManifest({
+          payload,
+          signature: sign(null, Buffer.from(CanonicalJson.stringify(payload)), privateKey).toString("hex"),
+        }),
+      ),
+    )
   }
   for (const entry of [mainEntry, sidecarEntry]) {
     const built = await Bun.build({

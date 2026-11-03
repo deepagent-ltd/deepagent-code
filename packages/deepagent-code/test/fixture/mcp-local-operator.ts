@@ -5,6 +5,7 @@ import path from "node:path"
 import { createHash, randomBytes } from "node:crypto"
 import { Rpc } from "../../src/util/rpc"
 import { createMcpOperatorBridge } from "../../src/cli/tui/mcp-operator-bridge"
+import { NativeWindowsBootstrap } from "../../src/installation/windows-native-bootstrap"
 
 export function authorizationServer() {
   const authorizations: string[] = []
@@ -132,7 +133,11 @@ async function run() {
       },
       zlocal: {
         type: "local",
-        command: [process.execPath, path.resolve(import.meta.dir, "mcp-local-operator.ts"), "stdio"],
+        command: [
+          process.execPath,
+          process.platform === "win32" ? Bun.main : path.resolve(import.meta.dir, "mcp-local-operator.ts"),
+          "stdio",
+        ],
       },
       public: { type: "remote", url: new URL("/public", server.listener.url).href, oauth: false },
     },
@@ -143,13 +148,16 @@ async function run() {
   await fs.mkdir(path.join(data, "cache", "bin"), { recursive: true })
   const rg = Bun.which("rg")
   assert(rg)
-  await fs.copyFile(rg, path.join(data, "cache", "bin", "rg"))
+  await fs.copyFile(rg, path.join(data, "cache", "bin", `rg${process.platform === "win32" ? ".exe" : ""}`))
   const globalConfig = Buffer.from(JSON.stringify({ $schema: config.$schema }))
-  await fs.writeFile(
-    path.join(data, mode === "legacy" ? "deepagent-code.jsonc" : "config.jsonc"),
-    globalConfig,
+  await fs.writeFile(path.join(data, mode === "legacy" ? "deepagent-code.jsonc" : "config.jsonc"), globalConfig)
+  const nativeWorkerMarker = NativeWindowsBootstrap.bindWorker()
+  if (nativeWorkerMarker) delete process.env.DAC_NATIVE_PRELOAD_HANDLES
+  const workerEnv = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   )
-  const worker = new Worker(new URL(import.meta.url))
+  if (nativeWorkerMarker) workerEnv.DAC_NATIVE_PRELOAD_HANDLES = nativeWorkerMarker
+  const worker = new Worker(new URL(import.meta.url), { env: workerEnv })
   const probeReady = new Promise<void>((resolve) => {
     worker.addEventListener("message", (event) => {
       if (event.data?.fixture === "ready") resolve()
@@ -175,6 +183,9 @@ async function run() {
       readWrites: 0,
       emptyAuthority: true,
       goalSameFact: true,
+      nativeCapture: true,
+      nativeStorage: true,
+      nativeJournal: true,
     })
     if (mode === "legacy-binding" || mode === "legacy-git-binding") {
       assert.equal(await probe("legacy-binding-seed"), true)
@@ -407,15 +418,18 @@ async function run() {
     await bridge.transport.whenSettled()
     await rpc.call("shutdown", undefined).catch(() => undefined)
     rpc.close()
-    worker.terminate()
+    await worker.terminate()
+    if (nativeWorkerMarker) NativeWindowsBootstrap.closeWorker(nativeWorkerMarker)
     server.release()
     await server.listener.stop(true)
   }
 }
 
 async function workerProbe() {
-  await import("../../src/cli/tui/worker")
   const { parentPort } = await import("node:worker_threads")
+  assert(parentPort)
+  if (process.platform === "win32") await NativeWindowsBootstrap.installCompiledEntry()
+  await import("../../src/cli/tui/worker")
   const { Effect, Option, Layer } = await import("effect")
   const { sql } = await import("drizzle-orm")
   const { AppRuntime } = await import("../../src/effect/app-runtime")
@@ -426,13 +440,16 @@ async function workerProbe() {
   const { InstanceStore } = await import("../../src/project/instance-store")
   const { InstanceRef } = await import("../../src/effect/instance-ref")
   const { MCP } = await import("../../src/mcp")
-  parentPort!.on("message", (value: unknown) => {
+  parentPort.on("message", (value: unknown) => {
     if (!value || typeof value !== "object" || !("fixture" in value)) return
     const kind = value.fixture
     void AppRuntime.runPromise(
       Effect.gen(function* () {
         if (kind === "listener") return Server.privateLocalWritesAvailable()
         if (kind === "repo") {
+          const bootstrap = yield* NativeWindowsBootstrap.Registered
+          const { McpWindowsStorage } = yield* Effect.promise(() => import("../../src/mcp/windows-storage"))
+          const storage = yield* McpWindowsStorage.Current
           const repo = yield* AccountRepo.Service
           const account = yield* Account.Service
           const db = (yield* Database.Service).db
@@ -447,6 +464,14 @@ async function workerProbe() {
             readWrites: Number(after[0].changes) - Number(before[0].changes),
             emptyAuthority: authority.account === null,
             goalSameFact: Server.privateLocalWritesAvailable() === Server.privateGoalWritesAvailable(),
+            nativeCapture:
+              process.platform !== "win32" ||
+              (!!bootstrap &&
+                bootstrap.preloaded(bootstrap.capture) &&
+                bootstrap.current(bootstrap.capture) &&
+                !!bootstrap.compiledCli?.(bootstrap.capture)),
+            nativeStorage: process.platform !== "win32" || !!storage,
+            nativeJournal: process.platform !== "win32" || !!bootstrap?.openMcpJournal,
           }
         }
         if (kind === "account-aba") {
@@ -474,6 +499,8 @@ async function workerProbe() {
           const { LocalAuthority } = yield* Effect.promise(() => import("../../src/installation/local-authority"))
           const { Global } = yield* Effect.promise(() => import("@deepagent-code/core/global"))
           const { McpAuthJournal } = yield* Effect.promise(() => import("../../src/mcp/auth-journal"))
+          const { McpWindowsStorage } = yield* Effect.promise(() => import("../../src/mcp/windows-storage"))
+          const storage = yield* McpWindowsStorage.Current
           const observed = yield* (yield* Project.Service).fromDirectory(process.cwd())
           const { FSUtil } = yield* Effect.promise(() => import("@deepagent-code/core/fs-util"))
           const old = yield* Effect.gen(function* () {
@@ -485,7 +512,12 @@ async function workerProbe() {
           }).pipe(Effect.provide(LocationIdentity.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
           const installation = yield* LocalAuthority.ensurePrivateInstallation()
           const journal = yield* Effect.promise(() =>
-            McpAuthJournal.open(path.join(Global.Path.config, "mcp-oauth", "journal.sqlite"), "1".repeat(64), "write"),
+            McpAuthJournal.open(
+              path.join(Global.Path.config, "mcp-oauth", "journal.sqlite"),
+              "1".repeat(64),
+              "write",
+              storage,
+            ),
           )
           assert(journal)
           const handle = journal.begin({
@@ -560,9 +592,10 @@ async function workerProbe() {
   parentPort!.postMessage({ fixture: "ready" })
 }
 
+const action = process.argv.at(-1)
 if (!isMainThread) await workerProbe()
-else if (process.argv[2] === "host") await run()
-else if (process.argv[2] === "stdio") {
+else if (action === "host") await run()
+else if (action === "stdio") {
   const { createInterface } = await import("node:readline")
   await fs.writeFile(path.join(process.env.DAC_MCP_OPERATOR_ROOT!, "stdio-started.txt"), "started")
   for await (const line of createInterface({ input: process.stdin })) {

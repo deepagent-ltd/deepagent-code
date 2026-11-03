@@ -38,6 +38,7 @@ export type Port = Readonly<{
   current: (capture: object) => boolean
   close: (capture: object) => void
   preloaded: (capture: object) => boolean
+  acceptPreload?: (capture: object, marker: string) => boolean
   compiledCli?: (capture: object) => boolean
   readInstallation: (capture: object) => string
   openPrivate?: (capture: object, request: string) => object
@@ -91,10 +92,22 @@ export type Port = Readonly<{
   readWorkWorkspaceOutput?: (capture: object, factory: object, workspace: object, request: string) => { metadata: string; bytes: Buffer }
   cleanupWorkWorkspace?: (capture: object, factory: object, workspace: object, request: string) => string
   closeWorkWorkspace?: (capture: object, factory: object, workspace: object) => void
+  bindWorker?: (capture: object) => string
+  closeWorker?: (capture: object, marker: string) => void
 }>
 export const Registered = Context.Reference<Port | undefined>("NativeWindowsBootstrap.Registered", { defaultValue: () => installed })
 
 let installed: Port | undefined
+
+function acceptWorkerPreload(native: Port) {
+  const marker = process.env.DAC_NATIVE_PRELOAD_HANDLES
+  if (!marker) return
+  if (!native.preloaded(native.capture) && typeof native.acceptPreload === "function")
+    native.acceptPreload(native.capture, marker)
+  // A consumed marker must not leak into MCP or CLI children created by this environment.
+  if (native.preloaded(native.capture)) delete process.env.DAC_NATIVE_PRELOAD_HANDLES
+}
+
 /** The sealed Node entry observes the same already-loaded native module after
  * the parent-held receipt has been accepted. No port/object/path is supplied. */
 export async function installFixedEntry() {
@@ -104,8 +117,9 @@ export async function installFixedEntry() {
   const { createRequire } = await import("node:module")
   const { fileURLToPath } = await import("node:url")
   const native = createRequire(import.meta.url)(fileURLToPath(new URL("./native-image-factory.node", import.meta.url))) as Port
-  if (!native || !Object.isFrozen(native) || typeof native.preloaded !== "function" ||
-    !native.preloaded(native.capture) || !native.current(native.capture)) throw unavailable()
+  if (!native || !Object.isFrozen(native) || typeof native.preloaded !== "function") throw unavailable()
+  acceptWorkerPreload(native)
+  if (!native.preloaded(native.capture) || !native.current(native.capture)) throw unavailable()
   installed = native
 }
 
@@ -128,9 +142,27 @@ export async function installCompiledEntry() {
   const { pathToFileURL, fileURLToPath } = await import("node:url")
   const native = createRequire(pathToFileURL(process.execPath))(
     fileURLToPath(new URL("./native-image-factory.node", pathToFileURL(process.execPath)))) as Port
-  if (!native || !Object.isFrozen(native) || typeof native.compiledCli !== "function" ||
-    !native.compiledCli(native.capture) || !native.preloaded(native.capture) || !native.current(native.capture)) throw unavailable()
+  if (!native || !Object.isFrozen(native) || typeof native.preloaded !== "function") throw unavailable()
+  acceptWorkerPreload(native)
+  if (typeof native.compiledCli !== "function" || !native.compiledCli(native.capture) ||
+    !native.preloaded(native.capture) || !native.current(native.capture)) throw unavailable()
   installed = native
+}
+
+/** Issue a distinct one-shot receipt for an actual worker environment. Only the
+ * marker crosses the worker boundary; the original capture never does. */
+export function bindWorker() {
+  if (process.platform !== "win32") return undefined
+  const native = installed
+  if (!native || typeof native.bindWorker !== "function" || !native.current(native.capture) || !native.preloaded(native.capture)) throw unavailable()
+  return native.bindWorker(native.capture)
+}
+
+export function closeWorker(marker: string) {
+  if (process.platform !== "win32") return
+  const native = installed
+  if (!native || typeof native.closeWorker !== "function") return
+  native.closeWorker(native.capture, marker)
 }
 
 /** The original Native capture observes its held installation once. Every

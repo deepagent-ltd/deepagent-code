@@ -37,7 +37,7 @@ struct Manifest { payload: Payload, signature: String }
 struct Receipt { version: u8, parent_pid: u32, child_pid: u32, parent_birth: String, child_birth: String, manifest: Manifest,
     parent_image: Identity, images: Vec<Identity>, runtime: Identity }
 
-pub struct Evidence { pub hash: String, purpose: String, files: Vec<File>, stamps: Vec<String>, parent: Handle }
+pub struct Evidence { pub hash: String, purpose: String, files: Vec<File>, stamps: Vec<String>, parent: Handle, manifest: Manifest }
 impl Evidence {
     pub fn artifact_name(&self)->io::Result<&'static str>{match self.purpose.as_str(){"desktop-sidecar"=>Ok("node.js"),"compiled-bun-cli"=>Ok("deepagent-code.exe"),_=>Err(io::ErrorKind::Unsupported.into())}}
     pub fn node_file(&self) -> io::Result<&File> {
@@ -398,9 +398,40 @@ pub fn accept(original: &FirstLoad, marker: &str) -> io::Result<Evidence> {
         birth(unsafe { GetCurrentProcess() })? != receipt.child_birth { return Err(io::ErrorKind::PermissionDenied.into()); }
     verify_process(parent.0, &receipt.parent_image)?;
     let stamps = files.iter().map(no_follow::stamp).collect::<io::Result<Vec<_>>>()?;
-    let result = Evidence { hash: format!("{:x}", Sha256::digest(body)), purpose: receipt.manifest.payload.purpose.clone(), files, stamps, parent };
+    let result = Evidence { hash: format!("{:x}", Sha256::digest(body)), purpose: receipt.manifest.payload.purpose.clone(), files, stamps, parent, manifest: receipt.manifest };
     result.current()?;
     Ok(result)
+}
+
+pub struct Worker { read: Handle, write: File, files: Vec<Handle>, parent: Handle }
+
+/// A worker receives a new one-shot receipt from an already proven parent. The
+/// original manifest and image handles stay pinned; the worker's own process is
+/// its lifetime parent, so no consumed launcher receipt is replayed.
+pub fn prepare_worker(original: &FirstLoad, proof: &Evidence) -> io::Result<(String, Worker)> {
+    original.current()?;
+    proof.current()?;
+    let current = unsafe { GetCurrentProcess() };
+    let receipt = Receipt { version: 1, parent_pid: unsafe { GetCurrentProcessId() }, child_pid: unsafe { GetCurrentProcessId() },
+        parent_birth: birth(current)?, child_birth: birth(current)?, manifest: proof.manifest.clone(),
+        parent_image: original.description().host.identity.clone(),
+        images: proof.files[1..].iter().map(|file| no_follow::identity(file)).collect::<io::Result<Vec<_>>>()?,
+        runtime: original.description().host.identity.clone() };
+    let body = serde_json::to_vec(&receipt)?;
+    if body.len() > LIMIT { return Err(io::ErrorKind::InvalidData.into()); }
+    let (read, write) = pipe()?;
+    let mut pipe_write = into_file(write);
+    pipe_write.write_all(&(body.len() as u32).to_be_bytes())?;
+    pipe_write.write_all(&body)?;
+    pipe_write.flush()?;
+    let files = std::iter::once(read.0).chain(proof.files.iter().map(|file| file.as_raw_handle() as HANDLE))
+        .map(|handle| duplicate(handle, true)).collect::<io::Result<Vec<_>>>()?;
+    let parent = duplicate(current, true)?;
+    let marker = files.iter().map(|handle| format!("{:x}", handle.0 as usize)).chain(std::iter::once(format!("{:x}", parent.0 as usize)))
+        .collect::<Vec<_>>().join(":");
+    original.current()?;
+    proof.current()?;
+    Ok((marker, Worker { read, write: pipe_write, files, parent }))
 }
 
 pub fn birth(process: HANDLE) -> io::Result<String> {

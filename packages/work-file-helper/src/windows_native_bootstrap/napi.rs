@@ -60,7 +60,7 @@ impl Api {
     }
 }
 
-struct State { api: Api, token: usize, image: Option<FirstLoad>, preload: Option<preload::Evidence>, installation: Option<super::installation::Installed>, children: HashMap<usize, preload::Child>, sidecars: HashMap<usize, preload::Prepared> }
+struct State { api: Api, token: usize, image: Option<FirstLoad>, preload: Option<preload::Evidence>, installation: Option<super::installation::Installed>, children: HashMap<usize, preload::Child>, sidecars: HashMap<usize, preload::Prepared>, workers: HashMap<String, preload::Worker> }
 static STATES: OnceLock<Mutex<HashMap<usize, State>>> = OnceLock::new();
 fn states() -> &'static Mutex<HashMap<usize, State>> { STATES.get_or_init(|| Mutex::new(HashMap::new())) }
 
@@ -107,8 +107,26 @@ pub fn with_preloaded_image<A>(env: Env, capture: Value, run: impl FnOnce(&First
 pub fn register(env: Env, exports: Value, address: *const c_void) -> Value {
     let Ok(api) = Api::load() else { return ptr::null_mut(); };
     let result = (|| -> io::Result<()> {
-        let image = FirstLoad::capture(address)?;
-        let preload = preload::receive(&image)?;
+        // Loader activity can invalidate a ToolHelp snapshot while it is being read.
+        // Retry the complete capture a bounded number of times, never omit an image.
+        let mut retries = 0;
+        let image = loop {
+            match FirstLoad::capture(address) {
+                Ok(image) => break image,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock && retries < 3 => {
+                    retries += 1;
+                    std::thread::yield_now();
+                },
+                Err(error) => {
+                    eprintln!("WINDOWS_NATIVE_CAPTURE_STAGE image");
+                    return Err(error);
+                },
+            }
+        };
+        let preload = preload::receive(&image).map_err(|error| {
+            eprintln!("WINDOWS_NATIVE_CAPTURE_STAGE preload");
+            error
+        })?;
         let token = Box::into_raw(Box::new(env as usize));
         let mut external = ptr::null_mut();
         if unsafe { (api.create_external)(env, token.cast(), Some(finalize), ptr::null_mut(), &mut external) } != 0 {
@@ -117,7 +135,7 @@ pub fn register(env: Env, exports: Value, address: *const c_void) -> Value {
         }
         let mut all = states().lock().map_err(|_| io::ErrorKind::Other)?;
         if all.contains_key(&(env as usize)) { return Err(io::ErrorKind::PermissionDenied.into()); }
-        all.insert(env as usize, State { api, token: token as usize, image: Some(image), preload, installation: None, children: HashMap::new(), sidecars: HashMap::new() });
+        all.insert(env as usize, State { api, token: token as usize, image: Some(image), preload, installation: None, children: HashMap::new(), sidecars: HashMap::new(), workers: HashMap::new() });
         drop(all);
         if unsafe { (api.cleanup)(env, cleanup, env) } != 0 || unsafe { (api.set_property)(env, exports, c"capture".as_ptr(), external) } != 0 {
             states().lock().map_err(|_| io::ErrorKind::Other)?.remove(&(env as usize));
@@ -126,7 +144,7 @@ pub fn register(env: Env, exports: Value, address: *const c_void) -> Value {
         for (name, callback) in [(c"describe", describe as Callback), (c"current", current as Callback), (c"close", close as Callback), (c"preloaded", preloaded as Callback), (c"compiledCli",compiled_cli as Callback),
             (c"launchPreloadedNode", launch as Callback), (c"launchCli",launch_cli as Callback),(c"pollCli",poll_cli as Callback), (c"pollPreloadedNode", poll as Callback), (c"closePreloadedNode", close_child as Callback), (c"processBirth", process_birth as Callback),
             (c"prepareSidecar", prepare_sidecar as Callback), (c"bindSidecar", bind_sidecar as Callback),
-            (c"closeSidecar", close_sidecar as Callback), (c"acceptPreload", accept_preload as Callback), (c"readInstallation", read_installation as Callback)] {
+            (c"closeSidecar", close_sidecar as Callback), (c"bindWorker", bind_worker as Callback), (c"closeWorker", close_worker as Callback), (c"acceptPreload", accept_preload as Callback), (c"readInstallation", read_installation as Callback)] {
             let mut value = ptr::null_mut();
             if unsafe { (api.create_function)(env, name.as_ptr(), name.to_bytes().len(), callback, ptr::null_mut(), &mut value) } != 0 ||
                 unsafe { (api.set_property)(env, exports, name.as_ptr(), value) } != 0 { return Err(io::ErrorKind::Unsupported.into()); }
@@ -142,7 +160,11 @@ pub fn register(env: Env, exports: Value, address: *const c_void) -> Value {
         if unsafe { (api.freeze)(env, exports) } != 0 { return Err(io::ErrorKind::Unsupported.into()); }
         Ok(())
     })();
-    if result.is_err() { states().lock().ok().map(|mut all| all.remove(&(env as usize))); return api.error(env); }
+    if let Err(error) = result {
+        eprintln!("WINDOWS_NATIVE_CAPTURE_FAILURE kind={:?} os={}", error.kind(), error.raw_os_error().unwrap_or(0));
+        states().lock().ok().map(|mut all| all.remove(&(env as usize)));
+        return api.error(env);
+    }
     exports
 }
 
@@ -190,6 +212,7 @@ unsafe extern "C" fn close(env: Env, info: *mut c_void) -> Value {
         state.sidecars.values_mut().any(|sidecar| sidecar.close().is_err()) { return state.api.error(env); }
     state.sidecars.clear();
     state.children.clear();
+    state.workers.clear();
     state.installation = None;
     state.preload = None;
     state.image = None;
@@ -350,6 +373,28 @@ unsafe extern "C" fn close_sidecar(env: Env, info: *mut c_void) -> Value {
     }
     state.sidecars.remove(&(pointer as usize)); let mut value = ptr::null_mut();
     if unsafe { (state.api.get_undefined)(env, &mut value) } != 0 { return state.api.error(env); } value
+}
+unsafe extern "C" fn bind_worker(env: Env, info: *mut c_void) -> Value {
+    let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get_mut(&(env as usize)) else { return ptr::null_mut(); };
+    if !argument(&state.api, env, info, state.token) || !valid(state) || state.preload.is_none() || state.workers.len() >= 8 { return state.api.error(env); }
+    let (Some(image), Some(proof)) = (&state.image, &state.preload) else { return state.api.error(env); };
+    let (marker, worker) = match preload::prepare_worker(image, proof) { Ok(value) => value, Err(error) => {
+        eprintln!("dac-native-preload:bind-worker:{:?}:{:?}", error.kind(), error.raw_os_error()); return state.api.error(env);
+    }};
+    state.workers.insert(marker.clone(), worker);
+    native_string(state, env, &marker)
+}
+unsafe extern "C" fn close_worker(env: Env, info: *mut c_void) -> Value {
+    let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
+    let Some(state) = all.get_mut(&(env as usize)) else { return ptr::null_mut(); };
+    let Ok(values) = args(state, env, info, 2) else { return state.api.error(env); };
+    if !valid(state) { return state.api.error(env); }
+    let Ok(marker) = string(&state.api, env, values[1], 128) else { return state.api.error(env); };
+    if state.workers.remove(&marker).is_none() { return state.api.error(env); }
+    let mut value = ptr::null_mut();
+    if unsafe { (state.api.get_undefined)(env, &mut value) } != 0 { return state.api.error(env); }
+    value
 }
 unsafe extern "C" fn accept_preload(env: Env, info: *mut c_void) -> Value {
     let Ok(mut all) = states().lock() else { return ptr::null_mut(); };
