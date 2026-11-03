@@ -13,30 +13,20 @@
 // version (changes per release), so we'd snapshot a moving target.
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { realpathSync } from "node:fs"
 import { EOL } from "os"
 import { cliIt } from "../../lib/cli-process"
-import { normalizeForSnapshot, PATH_SEP } from "../../lib/snapshot"
+import { normalizeForSnapshot } from "../../lib/snapshot"
 
-// Composes `normalizeForSnapshot` (CRLF + tmpdir) with two help-specific
-// rules:
-//
-//   1. The harness's `oc-cli-XXX` subdir under TMPDIR collapses to `<HOME>`.
-//      `PATH_SEP` matches `/` and `\\` so the rule works on POSIX + Windows.
-//
-//   2. yargs wraps the `[string] [default: "..."]` clause based on the
-//      pre-normalized default's character length, so different random home
-//      path widths produce different leading-whitespace counts (or even
-//      line-wraps onto a fresh line on Windows). `\s+` matches both forms.
-function normalize(text: string): string {
-  return normalizeForSnapshot(text, {
-    pathReplacements: [
-      // Mixed-case [A-Za-z0-9] because node's mkdtemp suffix is mixed-case
-      // (the harness now uses FileSystem.makeTempDirectoryScoped under the
-      // hood). A `[a-z0-9]+` regex would leave uppercase chars trailing.
-      [new RegExp(`<TMPDIR>${PATH_SEP}oc-cli-[A-Za-z0-9]+`, "g"), "<HOME>"],
-      [/\s+\[string\] \[default: "<HOME>"\]/g, ' [string] [default: "<HOME>"]'],
-    ],
-  })
+function normalizeHelp(home: string) {
+  // yargs hard-wraps long defaults, including inside a single path segment.
+  // Match the actual fixture home across those wraps before stripping TMPDIR.
+  const lineBreak = "\\r?\\n[ \\t]*"
+  const value = Array.from(`"${home}"]`, (char) =>
+    char === " " ? `(?: |${lineBreak})` : RegExp.escape(char),
+  ).join(`(?:${lineBreak})?`)
+  const defaultHome = new RegExp(`\\s+\\[string\\]\\s+\\[default:\\s+${value}`, "g")
+  return (text: string) => normalizeForSnapshot(text.replace(defaultHome, ' [string] [default: "<HOME>"]'))
 }
 
 // Top-level commands. Order matches what `deepagentCode --help` prints today;
@@ -125,8 +115,9 @@ describe("deepagentCode CLI help-text snapshots", () => {
   // versus ~1 minute if we serialized.
   cliIt.live(
     "every documented command emits stable help text",
-    ({ deepagentCode }) =>
+    ({ deepagentCode, home }) =>
       Effect.gen(function* () {
+        const normalize = normalizeHelp(realpathSync(home))
         const topLevel = yield* deepagentCode.spawn(["--help"], { env: SNAPSHOT_ENV })
         expect(topLevel.exitCode).toBe(0)
         expect(topLevel.stderr.endsWith(EOL)).toBe(true)

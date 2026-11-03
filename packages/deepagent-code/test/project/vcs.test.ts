@@ -573,7 +573,8 @@ describe("Vcs work overview", () => {
 worktreeIt.live("work overview keeps a nested directory's status, numstat and review paths in the same scope", () =>
   Effect.gen(function* () {
     const root = yield* tmpdirScoped({ git: true })
-    const dir = path.join(root, " nested ")
+    // Win32 does not reliably preserve trailing spaces in directory names.
+    const dir = path.join(root, process.platform === "win32" ? " nested space" : " nested ")
     yield* write(path.join(dir, "same.txt"), "before\n")
     yield* write(path.join(root, "outside.txt"), "outside\n")
     yield* git(root, ["add", "."])
@@ -593,12 +594,13 @@ worktreeIt.live("work overview keeps a nested directory's status, numstat and re
     expect(result.summary).toMatchObject({
       state: "ready",
       directory: dir,
-      repositoryRoot: root,
       files: 2,
       additions: 2,
       deletions: 1,
       uncommitted: 2,
     })
+    // Git for Windows emits forward slashes while the fixture path uses native separators.
+    expect(result.summary.repositoryRoot && path.normalize(result.summary.repositoryRoot)).toBe(root)
     expect(result.diff.map((item) => item.file).sort()).toEqual(["new.txt", "same.txt"])
     expect(result.diff.find((item) => item.file === "same.txt")?.patch).toContain("--- a/same.txt")
     expect(result.diff.some((item) => item.patch?.includes("outside changed"))).toBe(false)
