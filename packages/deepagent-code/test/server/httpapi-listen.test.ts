@@ -2,11 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test"
 import net from "node:net"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import * as Log from "@deepagent-code/core/util/log"
-import { Server } from "../../src/server/server"
-import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import { withTimeout } from "../../src/util/timeout"
-import { resetDatabase } from "../fixture/db"
-import { tmpdir } from "../fixture/fixture"
+
+// Install the source-only Settings port before any listener consumer captures AppLayer.
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { PtyPaths } = await import("../../src/server/routes/instance/httpapi/groups/pty")
+const { resetDatabase } = await import("../fixture/db")
+const { tmpdir } = await import("../fixture/fixture")
 
 await Log.init({ print: false })
 

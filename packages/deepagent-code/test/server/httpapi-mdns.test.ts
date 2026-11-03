@@ -28,6 +28,7 @@ void mock.module("bonjour-service", () => ({
 }))
 
 // Import Server AFTER the mock so the MDNS module picks up the stub.
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
 const { Server } = await import("../../src/server/server")
 
 // Release the bonjour-service mock when this file finishes so later files
