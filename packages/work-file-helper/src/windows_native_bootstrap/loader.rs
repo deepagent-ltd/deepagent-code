@@ -53,14 +53,17 @@ impl FirstLoad {
         let system = LockedPath::open(&system_name, true, false).map_err(|error| diagnostic(error, "system-root-lease", None))?;
         require_machine(&system.file).map_err(|error| diagnostic(error, "system-root-dacl", None))?;
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId()) };
-        if snapshot == INVALID_HANDLE_VALUE { return Err(io::Error::last_os_error()); }
+        if snapshot == INVALID_HANDLE_VALUE {
+            let error = io::Error::last_os_error();
+            eprintln!("WINDOWS_NATIVE_MODULE_SNAPSHOT os={}", error.raw_os_error().unwrap_or(0));
+            return Err(error);
+        }
         let snapshot = Snapshot(snapshot);
         let mut entry: MODULEENTRY32W = unsafe { std::mem::zeroed() };
         entry.dwSize = size_of::<MODULEENTRY32W>() as u32;
         if unsafe { Module32FirstW(snapshot.0, &mut entry) } == 0 {
             let error = io::Error::last_os_error();
             eprintln!("WINDOWS_NATIVE_MODULE_FIRST os={}", error.raw_os_error().unwrap_or(0));
-            if error.raw_os_error() == Some(24) { return Err(io::Error::new(io::ErrorKind::WouldBlock, error)); }
             return Err(error);
         }
         let mut images = Vec::new();
@@ -68,7 +71,6 @@ impl FirstLoad {
             if images.len() >= 128 { return Err(io::ErrorKind::Unsupported.into()); }
             let held = module(entry.modBaseAddr.cast()).map_err(|error| {
                 eprintln!("WINDOWS_NATIVE_MODULE_HANDLE os={}", error.raw_os_error().unwrap_or(0));
-                if error.raw_os_error() == Some(24) { return io::Error::new(io::ErrorKind::WouldBlock, error); }
                 error
             })?;
             let path = module_path(held.0)?;
@@ -96,7 +98,6 @@ impl FirstLoad {
                 let error = io::Error::last_os_error();
                 if error.raw_os_error() == Some(18) { break; }
                 eprintln!("WINDOWS_NATIVE_MODULE_NEXT count={} os={}", images.len(), error.raw_os_error().unwrap_or(0));
-                if error.raw_os_error() == Some(24) { return Err(io::Error::new(io::ErrorKind::WouldBlock, error)); }
                 return Err(error);
             }
         }

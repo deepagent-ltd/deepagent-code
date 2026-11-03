@@ -113,8 +113,9 @@ pub fn register(env: Env, exports: Value, address: *const c_void) -> Value {
         let image = loop {
             match FirstLoad::capture(address) {
                 Ok(image) => break image,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock && retries < 3 => {
+                Err(error) if (error.kind() == io::ErrorKind::WouldBlock || error.raw_os_error() == Some(24)) && retries < 3 => {
                     retries += 1;
+                    eprintln!("WINDOWS_NATIVE_CAPTURE_RETRY attempt={} kind={:?} os={}", retries, error.kind(), error.raw_os_error().unwrap_or(0));
                     std::thread::yield_now();
                 },
                 Err(error) => {
