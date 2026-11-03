@@ -55,8 +55,8 @@ const PERF_STAT = ` Performance counter stats for './bench':
 
 beforeAll(async () => {
   fakeBinDir = await tmpRootSharedAsync()
-  // A fake `perf` that answers record/report/stat like the real one. Node shebang
-  // keeps it cross-platform (macOS test runner has no real perf).
+  // A fake `perf` answers record/report/stat through the real adapter. Windows
+  // needs a command launcher; POSIX executes the same Node fixture with a shebang.
   const script = `#!/usr/bin/env node
 const args = process.argv.slice(2)
 const sub = args[0]
@@ -65,9 +65,15 @@ if (sub === "report") { process.stdout.write(${JSON.stringify(PERF_REPORT)}); pr
 if (sub === "stat") { process.stdout.write(${JSON.stringify(PERF_STAT)}); process.exit(0) }
 process.exit(0)
 `
-  const perfPath = path.join(fakeBinDir, "perf")
-  await fs.writeFile(perfPath, script, { mode: 0o755 })
-  await fs.chmod(perfPath, 0o755)
+  const scriptPath = path.join(fakeBinDir, "perf-fixture.cjs")
+  await fs.writeFile(scriptPath, script, { mode: 0o755 })
+  if (process.platform === "win32")
+    await fs.writeFile(path.join(fakeBinDir, "perf.cmd"), `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`)
+  else {
+    const perfPath = path.join(fakeBinDir, "perf")
+    await fs.writeFile(perfPath, script, { mode: 0o755 })
+    await fs.chmod(perfPath, 0o755)
+  }
   originalPath = process.env.PATH
   process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath ?? ""}`
 })
@@ -147,6 +153,7 @@ describe("P3A ProfileTool.execute — real tool path", () => {
         expect(asks.filter((a) => a.permission === "execute").length).toBe(1)
       }),
     { git: true },
+    15_000,
   )
 
   it.instance(
