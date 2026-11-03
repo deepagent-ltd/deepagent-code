@@ -29,13 +29,13 @@ export const layer = Layer.effectContext(
 async function requireAbsent() {
   const home = process.env.DEEPAGENT_CODE_TEST_HOME
   if (!home || !path.isAbsolute(home)) throw new Error("Empty settings fixture requires an isolated test home")
-  const root = await fs.realpath(home)
-  const relative = path.relative(home, Global.Path.config)
+  const root = await fs.realpath(path.dirname(home))
+  const relative = path.relative(root, Global.Path.config)
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
     throw new Error("Empty settings fixture is outside its isolated config directory")
   const directory = { path: root }
-  // A repointed test home can lack the entire config directory. Only an absent
-  // component below the verified home is empty; dangling links and other IO fail.
+  // Home and XDG config may be siblings under one isolated test root. Only an absent
+  // component below that root is empty; dangling links and other IO fail.
   for (const name of relative.split(path.sep)) {
     const next = path.join(directory.path, name)
     if (!await exists(next)) return

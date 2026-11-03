@@ -3,12 +3,14 @@ import { Effect } from "effect"
 import { and, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { GroupID } from "@deepagent-code/core/im/id"
-import { AppRuntime } from "@/effect/app-runtime"
 import { MemberTable } from "@deepagent-code/core/im/sql"
-import { Server } from "@/server/server"
-import { IMPaths } from "@/server/routes/instance/httpapi/groups/im"
-import { resetDatabase } from "../fixture/db"
-import { tmpdir } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { AppRuntime } = await import("@/effect/app-runtime")
+const { Server } = await import("@/server/server")
+const { IMPaths } = await import("@/server/routes/instance/httpapi/groups/im")
+const { resetDatabase } = await import("../fixture/db")
+const { tmpdir } = await import("../fixture/fixture")
 
 afterEach(resetDatabase)
 

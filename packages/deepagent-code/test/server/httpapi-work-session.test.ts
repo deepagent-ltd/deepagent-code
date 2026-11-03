@@ -10,7 +10,14 @@ test("actual HTTP ingress preserves bound Work refusal and ordinary Session admi
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
   )
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixture/httpapi-work-session.ts"), root], {
+  const child = Bun.spawn([
+    process.execPath,
+    ...(process.platform === "win32"
+      ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+      : []),
+    path.join(import.meta.dir, "fixture/httpapi-work-session.ts"),
+    root,
+  ], {
     cwd: path.join(root, "project"),
     env: {
       PATH: process.env.PATH,

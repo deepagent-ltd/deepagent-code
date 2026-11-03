@@ -7,7 +7,14 @@ test("actual authenticated Node HTTP MCP Apps routes read only explicitly approv
   const root = await realpath(await mkdtemp(path.join(tmpdir(), "dac-mcp-apps-http-")))
   await Promise.all(["home", "tmp", "project"].map((name) => mkdir(path.join(root, name), { mode: 0o700 })))
   const child = Bun.spawn({
-    cmd: [process.execPath, path.join(import.meta.dir, "fixture/mcp-apps-http.ts"), root],
+    cmd: [
+      process.execPath,
+      ...(process.platform === "win32"
+        ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+        : []),
+      path.join(import.meta.dir, "fixture/mcp-apps-http.ts"),
+      root,
+    ],
     cwd: path.resolve(import.meta.dir, "../.."),
     env: {
       PATH: process.env.PATH,
