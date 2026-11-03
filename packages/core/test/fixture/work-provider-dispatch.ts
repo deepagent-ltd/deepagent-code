@@ -33,6 +33,7 @@ import { WorkAuthorityFixture } from "./work-authority"
 import { EventInvestigationFixture } from "./event-investigation"
 import { WorkRouteFixture } from "./work-route"
 import { projectLayer } from "./project-layer"
+import { serve } from "../../../deepagent-code/test/fixture/http-server"
 
 export type Fixture = Awaited<ReturnType<typeof create>>
 export type Context = Pick<Fixture, "root" | "filename" | "candidate" | "state">
@@ -59,69 +60,75 @@ export async function create(
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-work-provider-")))
   await fs.mkdir(path.join(root, "project"))
   const state = { mode: "complete", bodies: [] as string[], reads: 0, streams: 0 }
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      if (new URL(request.url).pathname === "/v1/responses/input_tokens" && options.counter)
-        return options.counter(request)
-      if (new URL(request.url).pathname !== "/v1/responses") throw new Error("Unexpected network path")
-      state.bodies.push(await request.text())
-      if (options.generation) return options.generation(state.bodies.length)
-      if (state.mode === "drop")
-        return new Response(
-          'data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"partial"}\n\n',
-          { headers: { "content-type": "text/event-stream" } },
-        )
-      if (state.mode === "wait")
-        return new Response(
-          new ReadableStream({
-            cancel() {
-              options.onCancel?.()
-            },
-            start(controller) {
-              controller.enqueue(
-                new TextEncoder().encode(
-                  'data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"partial"}\n\n',
-                ),
-              )
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        )
-      await options.beforeTerminal?.()
-      const usage =
-        state.mode === "missing-usage"
-          ? undefined
-          : {
-              input_tokens: state.mode === "overrun" ? 42 : 41,
-              output_tokens: 12,
-              output_tokens_details: { reasoning_tokens: state.mode === "invalid-usage" ? 13 : 5 },
-              total_tokens: state.mode === "overrun" ? 54 : 53,
-            }
-      const terminal = `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", usage } })}\n\n`
+  const server = await serve(async (request) => {
+    if (new URL(request.url).pathname === "/v1/responses/input_tokens" && options.counter)
+      return options.counter(request)
+    if (new URL(request.url).pathname !== "/v1/responses") throw new Error("Unexpected network path")
+    state.bodies.push(await request.text())
+    if (options.generation) return options.generation(state.bodies.length)
+    if (state.mode === "drop")
+      return new Response('data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"partial"}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      })
+    if (state.mode === "wait")
       return new Response(
-        'data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"accepted"}\n\n' +
-          terminal +
-          (state.mode === "duplicate" ? terminal : ""),
+        new ReadableStream({
+          cancel() {
+            options.onCancel?.()
+          },
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"partial"}\n\n',
+              ),
+            )
+          },
+        }),
         { headers: { "content-type": "text/event-stream" } },
       )
-    },
+    await options.beforeTerminal?.()
+    const usage =
+      state.mode === "missing-usage"
+        ? undefined
+        : {
+            input_tokens: state.mode === "overrun" ? 42 : 41,
+            output_tokens: 12,
+            output_tokens_details: { reasoning_tokens: state.mode === "invalid-usage" ? 13 : 5 },
+            total_tokens: state.mode === "overrun" ? 54 : 53,
+          }
+    const terminal = `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", usage } })}\n\n`
+    return new Response(
+      'data: {"type":"response.output_text.delta","item_id":"msg_fixture","delta":"accepted"}\n\n' +
+        terminal +
+        (state.mode === "duplicate" ? terminal : ""),
+      { headers: { "content-type": "text/event-stream" } },
+    )
   })
   const original = WorkRouteFixture.candidate(`${server.url.origin}/v1/responses`)
-  const binding = options.profile ? { ...EventInvestigationFixture.binding("dispatch-profile"),
-    provider: original.binding.provider, auditedText: original.binding.auditedText,
-    deadline: original.binding.deadline,
-    budget: { ...WorkAuthorityPolicy.EVENT_INVESTIGATE_PROFILE.budget, maxCompletionTokens: 64 },
-    ...(options.profile === "project" ? {
-      profile: { id: "project_work_v1" as const, version: 1 as const, hash: WorkAuthorityPolicy.PROJECT_PROFILE_HASH },
-      source: { ...original.binding.source, kind: "server_operator" as const },
-    } : {}),
-  } : original.binding
+  const binding = options.profile
+    ? {
+        ...EventInvestigationFixture.binding("dispatch-profile"),
+        provider: original.binding.provider,
+        auditedText: original.binding.auditedText,
+        deadline: original.binding.deadline,
+        budget: { ...WorkAuthorityPolicy.EVENT_INVESTIGATE_PROFILE.budget, maxCompletionTokens: 64 },
+        ...(options.profile === "project"
+          ? {
+              profile: {
+                id: "project_work_v1" as const,
+                version: 1 as const,
+                hash: WorkAuthorityPolicy.PROJECT_PROFILE_HASH,
+              },
+              source: { ...original.binding.source, kind: "server_operator" as const },
+            }
+          : {}),
+      }
+    : original.binding
   const profile = WorkAuthorityPolicy.profileFor(binding.profile)
   if (!profile) throw new Error("Fixture requires an exact known profile")
-  const candidate = options.profile ? { ...original, binding,
-    request: LLM.updateRequest(original.request, { system: profile.instructions }) } : original
+  const candidate = options.profile
+    ? { ...original, binding, request: LLM.updateRequest(original.request, { system: profile.instructions }) }
+    : original
   const filename = path.join(root, "authority.sqlite")
   await Effect.runPromise(
     WorkAuthorityFixture.initialize().pipe(Effect.provide(WorkAuthorityFixture.database(filename)), Effect.scoped),
@@ -133,7 +140,7 @@ export async function create(
     state,
     server,
     async close() {
-      server.stop(true)
+      await server.stop()
       await fs.rm(root, { recursive: true, force: true })
     },
   }
@@ -230,9 +237,11 @@ export const admit = Effect.fn("WorkProviderDispatchFixture.admit")(function* (
     directory: AbsolutePath.make(directory),
     project: { kind: "registered_root", observedProjectId: "global" },
   })
-  const namespace = fixture.candidate.binding.schemaVersion === "work-execution.v2"
-    ? yield* db.get<{ binding_hash: string }>(sql`SELECT binding_hash FROM context_security_namespace
-      WHERE id=${identity.securityNamespaceId}`) : undefined
+  const namespace =
+    fixture.candidate.binding.schemaVersion === "work-execution.v2"
+      ? yield* db.get<{ binding_hash: string }>(sql`SELECT binding_hash FROM context_security_namespace
+      WHERE id=${identity.securityNamespaceId}`)
+      : undefined
   if (fixture.candidate.binding.schemaVersion === "work-execution.v2" && !namespace)
     throw new Error("Actual fixture namespace is missing")
   const binding = {
@@ -243,10 +252,17 @@ export const admit = Effect.fn("WorkProviderDispatchFixture.admit")(function* (
       securityNamespaceID: identity.securityNamespaceId,
       projectScopeKey: identity.projectScopeKey,
     },
-    ...(fixture.candidate.binding.schemaVersion === "work-execution.v2" ? {
-      projectScope: { ...fixture.candidate.binding.projectScope, projectID: "global",
-        canonicalRoot: directory, locationKey: identity.locationKey, namespaceBindingHash: namespace!.binding_hash },
-    } : {}),
+    ...(fixture.candidate.binding.schemaVersion === "work-execution.v2"
+      ? {
+          projectScope: {
+            ...fixture.candidate.binding.projectScope,
+            projectID: "global",
+            canonicalRoot: directory,
+            locationKey: identity.locationKey,
+            namespaceBindingHash: namespace!.binding_hash,
+          },
+        }
+      : {}),
   }
   yield* db.run(
     sql`INSERT INTO test_work_route VALUES (${binding.provider.evidenceID}, ${binding.provider.evidenceHash}, ${binding.provider.configurationHash}, 1)`,
@@ -294,27 +310,51 @@ export const initialize = Effect.fn("WorkProviderDispatchFixture.initialize")(fu
     },
   })
   const dispatch = yield* WorkRouteFixture.dispatch(db, binding.workID, committed.receipt.receiptId)
-  const legacyCount = WorkRouteFixture.receipt({ binding, wire, auditedText: WorkRouteFixture.TEXT,
-    runtime: fixture.candidate.runtime,
-    dispatch,
-  }, fixture.candidate.evidence)
-  const count = binding.schemaVersion === "work-execution.v2" ? yield* Effect.gen(function* () {
-    const inspected = WorkRoutePolicy.inspect({ binding, wire, auditedText: WorkRouteFixture.TEXT,
-      runtime: fixture.candidate.runtime }, { allowLoopbackHTTP: true })
-    if (!inspected.ok) return yield* inspected.error
-    const project = WorkRoutePolicy.projectCountBinding({ ...dispatch, project: {
-      rootWorkID: binding.rootWorkID,
-      turn: { key: Hash.sha256(CanonicalJson.stringify(["work-provider-turn.v1", binding.workID,
-        committed.receipt.sessionId, committed.receipt.activityId, committed.receipt.providerTurnSeq])),
-        activityID: committed.receipt.activityId, providerTurnSeq: committed.receipt.providerTurnSeq,
-        contextSelectionID: selected.admission.selectionId, contextProjectionHash: selected.admission.projectionHash,
-        historyPromptEpoch: committed.receipt.historyPromptEpoch,
-        historySourceEndMessageID: committed.receipt.historySourceEndMessageId ?? null },
-      predecessor: null, toolAdvertisementHash: inspected.value.toolAdvertisementHash,
-    } }, fixture.candidate.evidence, inspected.value)
-    if (!project) throw new Error("Actual fixture project count identity is missing")
-    return { ...legacyCount, version: "native-project-count-receipt.v1" as const, binding: project }
-  }) : legacyCount
+  const legacyCount = WorkRouteFixture.receipt(
+    { binding, wire, auditedText: WorkRouteFixture.TEXT, runtime: fixture.candidate.runtime, dispatch },
+    fixture.candidate.evidence,
+  )
+  const count =
+    binding.schemaVersion === "work-execution.v2"
+      ? yield* Effect.gen(function* () {
+          const inspected = WorkRoutePolicy.inspect(
+            { binding, wire, auditedText: WorkRouteFixture.TEXT, runtime: fixture.candidate.runtime },
+            { allowLoopbackHTTP: true },
+          )
+          if (!inspected.ok) return yield* inspected.error
+          const project = WorkRoutePolicy.projectCountBinding(
+            {
+              ...dispatch,
+              project: {
+                rootWorkID: binding.rootWorkID,
+                turn: {
+                  key: Hash.sha256(
+                    CanonicalJson.stringify([
+                      "work-provider-turn.v1",
+                      binding.workID,
+                      committed.receipt.sessionId,
+                      committed.receipt.activityId,
+                      committed.receipt.providerTurnSeq,
+                    ]),
+                  ),
+                  activityID: committed.receipt.activityId,
+                  providerTurnSeq: committed.receipt.providerTurnSeq,
+                  contextSelectionID: selected.admission.selectionId,
+                  contextProjectionHash: selected.admission.projectionHash,
+                  historyPromptEpoch: committed.receipt.historyPromptEpoch,
+                  historySourceEndMessageID: committed.receipt.historySourceEndMessageId ?? null,
+                },
+                predecessor: null,
+                toolAdvertisementHash: inspected.value.toolAdvertisementHash,
+              },
+            },
+            fixture.candidate.evidence,
+            inspected.value,
+          )
+          if (!project) throw new Error("Actual fixture project count identity is missing")
+          return { ...legacyCount, version: "native-project-count-receipt.v1" as const, binding: project }
+        })
+      : legacyCount
   yield* db.run(sql`INSERT INTO test_dispatch_evidence VALUES ('count', ${JSON.stringify(count)})`)
   return { binding, selected, committed, wire, count }
 })
@@ -365,7 +405,8 @@ export const execute = Effect.fn("WorkProviderDispatchFixture.execute")(function
   return yield* V2ProviderTurn.stream({
     service: yield* V2ProviderTurn.Service,
     receipt: data.committed.receipt,
-    prepare: (wireHash) => prepare(data.committed.receipt, data.selected.admission, wireHash, data.selected.instructions),
+    prepare: (wireHash) =>
+      prepare(data.committed.receipt, data.selected.admission, wireHash, data.selected.instructions),
     stream: LLMClient.stream(request).pipe(Stream.tap((event) => Effect.sync(() => events.push(event)))),
     outcomeArtifact: () => events,
     errorCode: () => "fixture_transport_failure",

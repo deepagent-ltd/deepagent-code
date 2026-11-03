@@ -1,7 +1,5 @@
 export * as WorkAuthorityFixture from "./work-authority"
 
-import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
-import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { Effect, Layer } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "../../src/database/database"
@@ -88,7 +86,9 @@ export const verifier = Layer.succeed(WorkAuthority.Verifier, {
           evidence_hash: string
           configuration_hash: string
           enabled: number
-        }>(sql`SELECT evidence_hash, configuration_hash, enabled FROM test_work_route WHERE id = ${input.provider.evidenceID}`)
+        }>(
+          sql`SELECT evidence_hash, configuration_hash, enabled FROM test_work_route WHERE id = ${input.provider.evidenceID}`,
+        )
         .pipe(Effect.orDie)
       if (!rows[0]?.enabled)
         return yield* new WorkAuthoritySchema.Error({
@@ -106,9 +106,7 @@ export const verifier = Layer.succeed(WorkAuthority.Verifier, {
 export function database(filename: string) {
   // Direct actual SQLite/Drizzle reopening isolates this store oracle from application bootstrap
   // recovery. Full SessionExecution/provider recovery is the separately owned integration slice.
-  return Layer.effect(Database.Service, EffectDrizzleSqlite.makeWithDefaults().pipe(Effect.map((db) => ({ db })))).pipe(
-    Layer.provide(SqliteClient.layer({ filename })),
-  )
+  return Database.layerFromPath(filename)
 }
 
 export const initialize = Effect.fn("WorkAuthorityFixture.initialize")(function* () {

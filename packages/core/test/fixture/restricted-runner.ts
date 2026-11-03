@@ -92,12 +92,24 @@ const build: V2ProviderTurn.BuildIdentity = {
 const fail = () =>
   new WorkAuthoritySchema.Error({ code: "PROFILE_UNAVAILABLE", message: "Controlled fixture evidence unavailable" })
 
-export async function create(scenario: Scenario, options?: {
-  readonly projectDefinitionHash: string
-  readonly generation: (turn: number) => Promise<Response>
-}) {
-  const observed = { counts: [] as string[], models: 0, preflights: 0, sourceRefreshes: 0,
-    sourceFreshRequests: [] as boolean[], nearExpiryCreated: 0, observationElapsedMs: 0, trips: [] as string[], canceled: 0 }
+export async function create(
+  scenario: Scenario,
+  options?: {
+    readonly projectDefinitionHash: string
+    readonly generation: (turn: number) => Promise<Response>
+  },
+) {
+  const observed = {
+    counts: [] as string[],
+    models: 0,
+    preflights: 0,
+    sourceRefreshes: 0,
+    sourceFreshRequests: [] as boolean[],
+    nearExpiryCreated: 0,
+    observationElapsedMs: 0,
+    trips: [] as string[],
+    canceled: 0,
+  }
   const control = { filename: "" }
   const source = await WorkProviderDispatchFixture.create({
     ...(options ? { profile: "project" as const, generation: options.generation } : {}),
@@ -138,10 +150,16 @@ export async function create(scenario: Scenario, options?: {
     ...source.candidate,
     binding: Schema.decodeUnknownSync(WorkAuthoritySchema.Binding)({
       ...source.candidate.binding,
-      ...(options && source.candidate.binding.schemaVersion === "work-execution.v2" ? {
-        toolPolicy: { ...source.candidate.binding.toolPolicy,
-          capabilities: [{ toolID: "read", operations: ["read" as const], definitionHash: options.projectDefinitionHash }] },
-      } : {}),
+      ...(options && source.candidate.binding.schemaVersion === "work-execution.v2"
+        ? {
+            toolPolicy: {
+              ...source.candidate.binding.toolPolicy,
+              capabilities: [
+                { toolID: "read", operations: ["read" as const], definitionHash: options.projectDefinitionHash },
+              ],
+            },
+          }
+        : {}),
       ...(scenario === "deadline"
         ? { deadline: Date.now() + 3000, budget: { ...source.candidate.binding.budget, maxDurationMs: 5000 } }
         : {}),
@@ -186,7 +204,7 @@ export async function create(scenario: Scenario, options?: {
   return {
     ...fixture,
     async close() {
-      source.server.stop(true)
+      await source.server.stop()
     },
   }
 }
@@ -198,13 +216,18 @@ export type Context = Omit<Fixture, "close" | "server">
 export async function open<A, E>(
   fixture: Context,
   body: Effect.Effect<A, E, WorkProviderDispatchFixture.Services | SessionExecution.Service>,
-  options?: { readonly project: Effect.Effect<{
-    readonly tools: ToolRegistry.Interface
-    readonly agents: AgentV2.Interface
-    readonly files: WorkFileCapability.Interface
-    readonly proof: WorkToolPolicy.LeafProof["Service"]
-    readonly count?: WorkCountAcquisition.Authority["Service"]
-  }, WorkAuthoritySchema.Error, Database.Service | WorkExecutionProfile.Service | Scope.Scope>
+  options?: {
+    readonly project: Effect.Effect<
+      {
+        readonly tools: ToolRegistry.Interface
+        readonly agents: AgentV2.Interface
+        readonly files: WorkFileCapability.Interface
+        readonly proof: WorkToolPolicy.LeafProof["Service"]
+        readonly count?: WorkCountAcquisition.Authority["Service"]
+      },
+      WorkAuthoritySchema.Error,
+      Database.Service | WorkExecutionProfile.Service | Scope.Scope
+    >
     readonly onPrepare?: Effect.Effect<void, WorkAuthoritySchema.Error, Database.Service>
     readonly count?: WorkCountAcquisition.Authority["Service"]
   },
@@ -214,24 +237,43 @@ export async function open<A, E>(
     Effect.gen(function* () {
       const database = yield* Database.Service
       const db = database.db
-      const originalVerifier = yield* Effect.gen(function* () { return yield* WorkAuthority.Verifier }).pipe(Effect.provide(WorkAuthorityFixture.verifier))
+      const originalVerifier = yield* Effect.gen(function* () {
+        return yield* WorkAuthority.Verifier
+      }).pipe(Effect.provide(WorkAuthorityFixture.verifier))
       const lease = { deadline: 0 }
-      const sourceTiming = ["source-refresh-after-slow-io", "source-near-expiry-before-promotion", "source-multi-tool-history"].includes(fixture.scenario)
-      const refresh = (fresh = false) => Effect.gen(function* () {
-        fixture.observed.sourceFreshRequests.push(fresh)
-        if (["source-near-expiry-before-promotion", "source-multi-tool-history"].includes(fixture.scenario) && !fresh && lease.deadline > performance.now()) return
-        if (options?.onPrepare) yield* options.onPrepare.pipe(Effect.provideService(Database.Service, database))
-        lease.deadline = performance.now() + 1000
-        fixture.observed.sourceRefreshes++
-      })
-      const verifier = sourceTiming ? Layer.succeed(WorkAuthority.Verifier, {
-        ...originalVerifier,
-        authorizeSource: (tx, binding) => Effect.gen(function* () {
-          if (fixture.scenario === "source-near-expiry-before-promotion") yield* Effect.sleep("80 millis")
-          if (performance.now() >= lease.deadline) return yield* new WorkAuthoritySchema.Error({ code: "WORK_REVOKED", message: "Controlled current source witness expired" })
-          return yield* originalVerifier.authorizeSource(tx, binding)
-        }),
-      }) : WorkAuthorityFixture.verifier
+      const sourceTiming = [
+        "source-refresh-after-slow-io",
+        "source-near-expiry-before-promotion",
+        "source-multi-tool-history",
+      ].includes(fixture.scenario)
+      const refresh = (fresh = false) =>
+        Effect.gen(function* () {
+          fixture.observed.sourceFreshRequests.push(fresh)
+          if (
+            ["source-near-expiry-before-promotion", "source-multi-tool-history"].includes(fixture.scenario) &&
+            !fresh &&
+            lease.deadline > performance.now()
+          )
+            return
+          if (options?.onPrepare) yield* options.onPrepare.pipe(Effect.provideService(Database.Service, database))
+          lease.deadline = performance.now() + 1000
+          fixture.observed.sourceRefreshes++
+        })
+      const verifier = sourceTiming
+        ? Layer.succeed(WorkAuthority.Verifier, {
+            ...originalVerifier,
+            authorizeSource: (tx, binding) =>
+              Effect.gen(function* () {
+                if (fixture.scenario === "source-near-expiry-before-promotion") yield* Effect.sleep("80 millis")
+                if (performance.now() >= lease.deadline)
+                  return yield* new WorkAuthoritySchema.Error({
+                    code: "WORK_REVOKED",
+                    message: "Controlled current source witness expired",
+                  })
+                return yield* originalVerifier.authorizeSource(tx, binding)
+              }),
+          })
+        : WorkAuthorityFixture.verifier
       const base = Layer.mergeAll(
         Layer.succeed(Database.Service, database),
         Layer.succeed(EventV2.Service, yield* EventV2.Service),
@@ -303,11 +345,12 @@ export async function open<A, E>(
               ? { ...fixture.candidate.runtime, configurationHash: "0".repeat(64) }
               : fixture.candidate.runtime
           }),
-        bind: () => Effect.gen(function* () {
-          const seal = yield* RequestExecutor.CurrentRequestSeal
-          if (!seal) return yield* fail()
-          return seal
-        }),
+        bind: () =>
+          Effect.gen(function* () {
+            const seal = yield* RequestExecutor.CurrentRequestSeal
+            if (!seal) return yield* fail()
+            return seal
+          }),
         current: () => Effect.void,
         acquireCount: (input) =>
           Effect.gen(function* () {
@@ -331,62 +374,156 @@ export async function open<A, E>(
             const binding = Schema.decodeUnknownSync(Schema.fromJsonString(WorkAuthoritySchema.Binding))(row.binding)
             const dispatch = yield* WorkRouteFixture.dispatch(db, input.workID, input.receiptID).pipe(Effect.orDie)
             const legacy = WorkRouteFixture.receipt(
-              { binding, auditedText: WorkRouteFixture.TEXT, runtime: input.runtime, wire: input.wire,
-                dispatch },
+              { binding, auditedText: WorkRouteFixture.TEXT, runtime: input.runtime, wire: input.wire, dispatch },
               input.route,
             )
-            const receipt = binding.schemaVersion === "work-execution.v2" ? yield* Effect.gen(function* () {
-              yield* refresh(true)
-              const current = yield* WorkAuthority.get(db, input.workID)
-              const turn = yield* db.select().from(V2ProviderTurnReceiptTable)
-                .where(eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptID)).get().pipe(Effect.orDie)
-              const attempt = turn?.provider_attempt_id ? yield* db.select().from(SessionProviderAttemptTable)
-                .where(eq(SessionProviderAttemptTable.attempt_id, turn.provider_attempt_id)).get().pipe(Effect.orDie) : undefined
-              assert(current && turn?.activity_id && turn.provider_turn_seq && attempt?.selection_id && attempt.projection_hash)
-              const previous = yield* db.transaction((tx) => WorkToolPolicy.previous(tx, current, input.receiptID))
-              const prior = previous ? yield* WorkCountAcquisition.getTurn(db, input.workID,
-                Hash.sha256(CanonicalJson.stringify(["work-provider-turn.v1", input.workID,
-                  previous.receipt.session_id, previous.receipt.activity_id, previous.receipt.provider_turn_seq]))) : undefined
-              const inspected = WorkRoutePolicy.inspect({ binding, auditedText: WorkRouteFixture.TEXT,
-                runtime: input.runtime, wire: input.wire }, { allowLoopbackHTTP: true })
-              assert(inspected.ok)
-              const project = WorkRoutePolicy.projectCountBinding({ ...dispatch, project: {
-                rootWorkID: binding.rootWorkID,
-                turn: { key: Hash.sha256(CanonicalJson.stringify(["work-provider-turn.v1", input.workID,
-                    turn.session_id, turn.activity_id, turn.provider_turn_seq])),
-                  activityID: turn.activity_id, providerTurnSeq: turn.provider_turn_seq,
-                  contextSelectionID: attempt.selection_id, contextProjectionHash: attempt.projection_hash,
-                  historyPromptEpoch: turn.history_prompt_epoch, historySourceEndMessageID: turn.history_source_end_message_id },
-                predecessor: previous && prior ? { acquisitionID: prior.acquisitionID, receiptID: previous.receipt.receipt_id,
-                  outcomeHash: previous.receipt.outcome_hash!,
-                  toolTerminalHash: previous.toolTerminalHash } : null,
-                toolAdvertisementHash: inspected.value.toolAdvertisementHash,
-              } }, input.route, inspected.value)
-              assert(project)
-              const now = Date.now()
-              const record = Schema.decodeUnknownSync(WorkCountAcquisitionSchema.ProjectRecord)({ version: 2,
-                acquisitionID: `fixture_count_${turn.provider_turn_seq}`, binding: project, state: "settled", revision: 3,
-                ownerToken: turn.owner_token, bootID: "fixture_boot", deadline: now + 9000,
-                result: { responseHash: legacy.responseHash, inputTokens: legacy.tokens, countedAt: now, expiresAt: now + 9000 },
-                errorCode: null, createdAt: now, updatedAt: now, sendingAt: now, terminalAt: now })
-              const authority = yield* Effect.serviceOption(WorkCountAcquisition.Authority)
-              assert(Option.isSome(authority) && authority.value.authenticateProject)
-              const mac = yield* authority.value.authenticateProject(record)
-              // Controlled counter evidence only. The store's original reader authenticates
-              // this exact fixture MAC row; this seam makes no Native/provider qualification.
-              yield* db.insert(WorkCountAcquisitionTable).values({
-                acquisition_id: record.acquisitionID, work_id: input.workID, slot_version: 2,
-                root_work_id: project.rootWorkID, activity_id: project.turn.activityID,
-                provider_turn_seq: project.turn.providerTurnSeq, turn_key: project.turn.key,
-                input_id: project.inputID, session_id: project.sessionID, provider_receipt_id: project.providerReceiptID,
-                provider_attempt_id: project.providerAttemptID, binding_hash: Hash.sha256(CanonicalJson.stringify(project)),
-                approval_id: project.approvalID, approval_revision: project.approvalRevision,
-                state: record.state, revision: record.revision, owner_token: record.ownerToken, boot_id: record.bootID,
-                deadline: record.deadline, record: CanonicalJson.stringify(record), record_hash: Hash.sha256(CanonicalJson.stringify(record)),
-                record_mac: mac, created_at: now, updated_at: now,
-              }).run().pipe(Effect.orDie)
-              return { ...legacy, version: "native-project-count-receipt.v1" as const, binding: project }
-            }) : legacy
+            const receipt =
+              binding.schemaVersion === "work-execution.v2"
+                ? yield* Effect.gen(function* () {
+                    yield* refresh(true)
+                    const current = yield* WorkAuthority.get(db, input.workID)
+                    const turn = yield* db
+                      .select()
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptID))
+                      .get()
+                      .pipe(Effect.orDie)
+                    const attempt = turn?.provider_attempt_id
+                      ? yield* db
+                          .select()
+                          .from(SessionProviderAttemptTable)
+                          .where(eq(SessionProviderAttemptTable.attempt_id, turn.provider_attempt_id))
+                          .get()
+                          .pipe(Effect.orDie)
+                      : undefined
+                    assert(
+                      current &&
+                        turn?.activity_id &&
+                        turn.provider_turn_seq &&
+                        attempt?.selection_id &&
+                        attempt.projection_hash,
+                    )
+                    const previous = yield* db.transaction((tx) =>
+                      WorkToolPolicy.previous(tx, current, input.receiptID),
+                    )
+                    const prior = previous
+                      ? yield* WorkCountAcquisition.getTurn(
+                          db,
+                          input.workID,
+                          Hash.sha256(
+                            CanonicalJson.stringify([
+                              "work-provider-turn.v1",
+                              input.workID,
+                              previous.receipt.session_id,
+                              previous.receipt.activity_id,
+                              previous.receipt.provider_turn_seq,
+                            ]),
+                          ),
+                        )
+                      : undefined
+                    const inspected = WorkRoutePolicy.inspect(
+                      { binding, auditedText: WorkRouteFixture.TEXT, runtime: input.runtime, wire: input.wire },
+                      { allowLoopbackHTTP: true },
+                    )
+                    assert(inspected.ok)
+                    const project = WorkRoutePolicy.projectCountBinding(
+                      {
+                        ...dispatch,
+                        project: {
+                          rootWorkID: binding.rootWorkID,
+                          turn: {
+                            key: Hash.sha256(
+                              CanonicalJson.stringify([
+                                "work-provider-turn.v1",
+                                input.workID,
+                                turn.session_id,
+                                turn.activity_id,
+                                turn.provider_turn_seq,
+                              ]),
+                            ),
+                            activityID: turn.activity_id,
+                            providerTurnSeq: turn.provider_turn_seq,
+                            contextSelectionID: attempt.selection_id,
+                            contextProjectionHash: attempt.projection_hash,
+                            historyPromptEpoch: turn.history_prompt_epoch,
+                            historySourceEndMessageID: turn.history_source_end_message_id,
+                          },
+                          predecessor:
+                            previous && prior
+                              ? {
+                                  acquisitionID: prior.acquisitionID,
+                                  receiptID: previous.receipt.receipt_id,
+                                  outcomeHash: previous.receipt.outcome_hash!,
+                                  toolTerminalHash: previous.toolTerminalHash,
+                                }
+                              : null,
+                          toolAdvertisementHash: inspected.value.toolAdvertisementHash,
+                        },
+                      },
+                      input.route,
+                      inspected.value,
+                    )
+                    assert(project)
+                    const now = Date.now()
+                    const record = Schema.decodeUnknownSync(WorkCountAcquisitionSchema.ProjectRecord)({
+                      version: 2,
+                      acquisitionID: `fixture_count_${turn.provider_turn_seq}`,
+                      binding: project,
+                      state: "settled",
+                      revision: 3,
+                      ownerToken: turn.owner_token,
+                      bootID: "fixture_boot",
+                      deadline: now + 9000,
+                      result: {
+                        responseHash: legacy.responseHash,
+                        inputTokens: legacy.tokens,
+                        countedAt: now,
+                        expiresAt: now + 9000,
+                      },
+                      errorCode: null,
+                      createdAt: now,
+                      updatedAt: now,
+                      sendingAt: now,
+                      terminalAt: now,
+                    })
+                    const authority = yield* Effect.serviceOption(WorkCountAcquisition.Authority)
+                    assert(Option.isSome(authority) && authority.value.authenticateProject)
+                    const mac = yield* authority.value.authenticateProject(record)
+                    // Controlled counter evidence only. The store's original reader authenticates
+                    // this exact fixture MAC row; this seam makes no Native/provider qualification.
+                    yield* db
+                      .insert(WorkCountAcquisitionTable)
+                      .values({
+                        acquisition_id: record.acquisitionID,
+                        work_id: input.workID,
+                        slot_version: 2,
+                        root_work_id: project.rootWorkID,
+                        activity_id: project.turn.activityID,
+                        provider_turn_seq: project.turn.providerTurnSeq,
+                        turn_key: project.turn.key,
+                        input_id: project.inputID,
+                        session_id: project.sessionID,
+                        provider_receipt_id: project.providerReceiptID,
+                        provider_attempt_id: project.providerAttemptID,
+                        binding_hash: Hash.sha256(CanonicalJson.stringify(project)),
+                        approval_id: project.approvalID,
+                        approval_revision: project.approvalRevision,
+                        state: record.state,
+                        revision: record.revision,
+                        owner_token: record.ownerToken,
+                        boot_id: record.bootID,
+                        deadline: record.deadline,
+                        record: CanonicalJson.stringify(record),
+                        record_hash: Hash.sha256(CanonicalJson.stringify(record)),
+                        record_mac: mac,
+                        created_at: now,
+                        updated_at: now,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    return { ...legacy, version: "native-project-count-receipt.v1" as const, binding: project }
+                  })
+                : legacy
             yield* db
               .run(
                 sql`INSERT INTO test_dispatch_evidence VALUES ('count', ${JSON.stringify(fixture.scenario === "wrong-count" ? { ...receipt, bodyHash: "0".repeat(64) } : receipt)}) ON CONFLICT(id) DO UPDATE SET value=excluded.value`,
@@ -408,12 +545,16 @@ export async function open<A, E>(
         Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, fixture.publicKey),
       )
       const project = options ? yield* options.project.pipe(Effect.provide(policy)) : undefined
-      const projectPolicy = project ? Layer.mergeAll(
-        Layer.succeed(WorkFileCapability.Service, project.files), Layer.succeed(WorkToolPolicy.LeafProof, project.proof),
-        ...(project.count ? [Layer.succeed(WorkCountAcquisition.Authority, project.count)] : []),
-      ) : Layer.empty
+      const projectPolicy = project
+        ? Layer.mergeAll(
+            Layer.succeed(WorkFileCapability.Service, project.files),
+            Layer.succeed(WorkToolPolicy.LeafProof, project.proof),
+            ...(project.count ? [Layer.succeed(WorkCountAcquisition.Authority, project.count)] : []),
+          )
+        : Layer.empty
       const ordinary = Layer.mergeAll(
-        project ? Layer.succeed(AgentV2.Service, project.agents)
+        project
+          ? Layer.succeed(AgentV2.Service, project.agents)
           : Layer.mock(AgentV2.Service, { all: () => trip("agents"), get: () => trip("agent") }),
         Layer.succeed(AgentGateway.Runtime, {
           snapshot: {
@@ -447,11 +588,16 @@ export async function open<A, E>(
             throw new Error("Unexpected gateway")
           },
         }),
-        project ? Layer.succeed(ToolRegistry.Service, project.tools)
+        project
+          ? Layer.succeed(ToolRegistry.Service, project.tools)
           : Layer.mock(ToolRegistry.Service, { materialize: () => trip("tools") }),
-        ...(project ? [Layer.succeed(WorkFileCapability.Service, project.files),
-          Layer.succeed(WorkToolPolicy.LeafProof, project.proof),
-          ...(project.count ? [Layer.succeed(WorkCountAcquisition.Authority, project.count)] : [])] : []),
+        ...(project
+          ? [
+              Layer.succeed(WorkFileCapability.Service, project.files),
+              Layer.succeed(WorkToolPolicy.LeafProof, project.proof),
+              ...(project.count ? [Layer.succeed(WorkCountAcquisition.Authority, project.count)] : []),
+            ]
+          : []),
         Layer.mock(PermissionV2.Service, {}),
         Layer.mock(SystemContextRegistry.Service, { load: () => trip("context") }),
         Layer.mock(SkillGuidance.Service, { load: () => trip("skills") }),
@@ -590,12 +736,18 @@ export async function run(scenario: Scenario) {
       scenario,
     )
     const resultRefused = ["revoked-before-result", "retired-before-result", "activity-rollback"].includes(scenario)
-    const knownUsage = ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) || resultRefused
+    const knownUsage =
+      ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ||
+      resultRefused
     const dispatched = knownUsage || ["drop", "missing-usage", "interrupt", "deadline"].includes(scenario)
     const counted =
       dispatched ||
       ["wrong-count", "bad-counter-response", "revoked-after-count", "retired-after-count"].includes(scenario)
-    assert.equal(result.success, ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario), result.error ?? "unexpected outcome")
+    assert.equal(
+      result.success,
+      ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario),
+      result.error ?? "unexpected outcome",
+    )
     assert.deepEqual(fixture.observed.trips, [])
     if (scenario === "source-refresh-after-slow-io") assert(fixture.observed.sourceRefreshes >= 5)
     if (scenario === "source-near-expiry-before-promotion") {
@@ -633,12 +785,22 @@ export async function run(scenario: Scenario) {
       assert.deepEqual(wire.input[1], { role: "user", content: [{ type: "input_text", text: WorkRouteFixture.TEXT }] })
       assert.equal(
         result.facts.works[0]?.outcome,
-        ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ? "succeeded" : resultRefused ? "pending" : "unknown",
+        ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario)
+          ? "succeeded"
+          : resultRefused
+            ? "pending"
+            : "unknown",
       )
       assert.equal(result.facts.reservations[0]?.state, knownUsage ? "settled" : "unknown")
       assert.equal(result.facts.reservations[0]?.charged_tokens, knownUsage ? 53 : 105)
-      assert.equal(result.facts.inventory.byCategory.work_execution.recovery, ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ? 0 : 1)
-      assert.equal(result.facts.inventory.byCategory.work_execution.resolved, ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ? 1 : 0)
+      assert.equal(
+        result.facts.inventory.byCategory.work_execution.recovery,
+        ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ? 0 : 1,
+      )
+      assert.equal(
+        result.facts.inventory.byCategory.work_execution.resolved,
+        ["complete", "source-refresh-after-slow-io", "source-near-expiry-before-promotion"].includes(scenario) ? 1 : 0,
+      )
       assert.equal(result.facts.inventory.byCategory.work_dispatch.resolved, knownUsage ? 1 : 0)
     }
     if (resultRefused) {
@@ -690,7 +852,10 @@ export async function run(scenario: Scenario) {
       assert.equal(cold.result.facts.works[0]?.outcome, result.facts.works[0]?.outcome)
       assert.equal(cold.result.facts.reservations.length, 1)
       assert.equal(cold.result.facts.attempts.length, 1)
-      assert.deepEqual(cold.result.facts.inventory.byCategory.work_execution, result.facts.inventory.byCategory.work_execution)
+      assert.deepEqual(
+        cold.result.facts.inventory.byCategory.work_execution,
+        result.facts.inventory.byCategory.work_execution,
+      )
       assert.equal(fixture.observed.counts.length, 1)
       assert.equal(fixture.state.bodies.length, 1)
     }
@@ -768,7 +933,17 @@ if (import.meta.main) {
         ...saved.candidate,
         request: WorkRouteFixture.candidate(saved.candidate.binding.provider.endpoint).request,
       },
-      observed: { counts: [], models: 0, preflights: 0, sourceRefreshes: 0, sourceFreshRequests: [], nearExpiryCreated: 0, observationElapsedMs: 0, trips: [], canceled: 0 },
+      observed: {
+        counts: [],
+        models: 0,
+        preflights: 0,
+        sourceRefreshes: 0,
+        sourceFreshRequests: [],
+        nearExpiryCreated: 0,
+        observationElapsedMs: 0,
+        trips: [],
+        canceled: 0,
+      },
       state: { mode: "complete", bodies: [], reads: 0, streams: 0 },
     }
     const result = await open(fixture, replay)
