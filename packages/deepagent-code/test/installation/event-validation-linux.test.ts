@@ -58,7 +58,8 @@ async function files(body: (workspace: Awaited<ReturnType<typeof WorkCommandRunt
   }
 }
 
-test("Linux snapshot mounts bind the actual copied inode, full binary bytes and empty input", () => files(async (workspace, source, bytes, content) => {
+// The copied-input receipt binds a POSIX UID and directory FD.
+test.skipIf(process.platform === "win32")("Linux snapshot mounts bind the actual copied inode, full binary bytes and empty input", () => files(async (workspace, source, bytes, content) => {
   const configuration = { ...EventValidationStoreFixture.configuration(), recipe: linux }
   const copied = await EventValidationLinux.copiedInputs(workspace, configuration, content)
   const stat = await fs.lstat(path.join(workspace.directory, "input.ts"), { bigint: true })
@@ -72,7 +73,7 @@ test("Linux snapshot mounts bind the actual copied inode, full binary bytes and 
   }))[0]).toMatchObject({ bytes: 0, sha256: digest(Buffer.alloc(0)) })
 }))
 
-test("Linux snapshot refuses missing, oversized, changed, symlinked or replaced workspace inputs", () => files(async (workspace, source, bytes, content) => {
+test.skipIf(process.platform === "win32")("Linux snapshot refuses missing, oversized, changed, symlinked or replaced workspace inputs", () => files(async (workspace, source, bytes, content) => {
   const configuration = { ...EventValidationStoreFixture.configuration(), recipe: linux }
   for (const file of [
     { ...content.files[0]!, missing: true },
