@@ -112,7 +112,7 @@ export async function responseFacts(response: Response, requestBody?: unknown) {
 // Install only in a fresh private integration listener, before its Server
 // import. The normal product and the SDK artifact remain unmodified.
 export async function install(root: string) {
-  if ((!root.startsWith("/tmp/dac-im-media-product-") && !root.startsWith(path.join(os.tmpdir(), "dac-im-media-product-lanes-"))) || !["A", "B"].includes(path.basename(root)))
+  if ((!root.startsWith(path.join(os.tmpdir(), "dac-im-media-product-")) && !root.startsWith(path.join(os.tmpdir(), "dac-im-media-product-lanes-"))) || !["A", "B"].includes(path.basename(root)))
     throw new Error("Private media observation scope required")
   const file = await fs.open(path.join(root, "media-trace-safe.jsonl"), "wx", 0o600)
   const count = { value: 0 }
