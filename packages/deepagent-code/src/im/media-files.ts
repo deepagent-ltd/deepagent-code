@@ -371,13 +371,13 @@ async function windowsPrivate(file: string, directory: boolean, created: boolean
   const deadline = setTimeout(() => {
     state.timedOut = true
     if (!state.closed) child.kill("SIGKILL")
-  }, 15_000)
+  }, 45_000)
   const join = { timer: undefined as ReturnType<typeof setTimeout> | undefined }
   try {
     const code = await Promise.race([
       exited,
       new Promise<null>((resolve) => {
-        join.timer = setTimeout(() => resolve(null), 17_000)
+        join.timer = setTimeout(() => resolve(null), 47_000)
       }),
     ])
     if (!state.closed || state.timedOut || code !== 0) {
