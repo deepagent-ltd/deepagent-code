@@ -11,6 +11,22 @@ import { MediaFiles } from "@/im/media-files"
 import { IMKernelMediaUpload } from "@/im/kernel/media-upload"
 import type { KernelSdk } from "@/im/kernel/sdk"
 
+test("Windows private media ACL loads its fixed module without interpolating paths", () => {
+  const invocation = MediaFiles.windowsPrivateInvocation(
+    "C:\\Windows",
+    "C:\\private\\quoted;$(unsafe)'file",
+    true,
+    false,
+  )
+  expect(invocation.cmd.slice(1, 4)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive"])
+  expect(invocation.cmd.at(-2)).toBe("-EncodedCommand")
+  expect(invocation.cmd.join(" ")).not.toContain("quoted")
+  expect(Object.keys(invocation.env)).toHaveLength(4)
+  const script = Buffer.from(invocation.cmd.at(-1)!, "base64").toString("utf16le")
+  expect(script).toContain("Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')")
+  expect(script).toContain("Get-Acl -LiteralPath $p")
+})
+
 async function fixture(size = 786451) {
   const workspaceID = `upload-private-${randomUUID()}`
   const parent = await MediaFiles.directory(workspaceID, true)
@@ -99,7 +115,7 @@ test("kernel uploader retains exact 10MiB bytes in 40 bounded chunks and closes 
   if (process.platform === "win32") return
   const retained = await Promise.all((await fs.readdir("/dev/fd")).map((descriptor) => fs.stat(`/dev/fd/${descriptor}`, { bigint: true }).then((stat) => stat.dev === identity.dev && stat.ino === identity.ino, () => false)))
   expect(retained.some(Boolean)).toBe(false)
-}, 15000)
+}, process.platform === "win32" ? 90_000 : 15_000)
 
 test("kernel uploader accepts an exact empty file and refuses a physical over-limit file before transport", async () => {
   await using empty = await fixture(0)

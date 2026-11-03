@@ -12,6 +12,7 @@ import type { IMAttachment } from "@deepagent-code/core/im/repository"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("IMMediaFileError", {
   code: Schema.Literals(["unsafe", "changed", "io", "cleanup"]),
+  detail: Schema.optional(Schema.String),
 }) {
   override get message() {
     return `Private media storage ${this.code}`
@@ -288,6 +289,8 @@ export async function remove(value: IMAttachment) {
 
 const WINDOWS_PRIVATE_SCRIPT = `
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $p=$env:DAC_MEDIA_PRIVATE_PATH
 $item=Get-Item -LiteralPath $p -Force
 if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
@@ -326,6 +329,7 @@ export function windowsPrivateInvocation(systemRoot: string, file: string, direc
   return {
     cmd: [
       path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-EncodedCommand",
@@ -342,23 +346,48 @@ export function windowsPrivateInvocation(systemRoot: string, file: string, direc
 
 async function windowsPrivate(file: string, directory: boolean, created: boolean) {
   const invocation = windowsPrivateInvocation(process.env.SystemRoot ?? "", file, directory, created)
+  const started = Date.now()
   const child = spawn(invocation.cmd[0], invocation.cmd.slice(1), {
     env: invocation.env,
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
+    shell: false,
   })
-  const exit = new Promise<boolean>((resolve) => {
-    child.once("error", () => resolve(false))
-    child.once("close", (code) => resolve(code === 0))
+  const state = { closed: false, timedOut: false, spawnError: false }
+  let stderr = ""
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString("utf8")).slice(-4096)
   })
-  const stop = () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
-  }
-  const timer = setTimeout(stop, 5000)
+  const exited = new Promise<number | null>((resolve) => {
+    child.once("error", () => {
+      state.spawnError = true
+      resolve(null)
+    })
+    child.once("close", (code) => {
+      state.closed = true
+      resolve(code)
+    })
+  })
+  const deadline = setTimeout(() => {
+    state.timedOut = true
+    if (!state.closed) child.kill("SIGKILL")
+  }, 15_000)
+  const join = { timer: undefined as ReturnType<typeof setTimeout> | undefined }
   try {
-    if (!(await exit)) throw new Error({ code: "unsafe" })
+    const code = await Promise.race([
+      exited,
+      new Promise<null>((resolve) => {
+        join.timer = setTimeout(() => resolve(null), 17_000)
+      }),
+    ])
+    if (!state.closed || state.timedOut || code !== 0) {
+      const outcome = state.timedOut ? "timeout" : state.spawnError ? "spawn-error" : !state.closed ? "close-unknown" : "exit"
+      const diagnostic = `${outcome}; exitCode=${code}; elapsedMs=${Date.now() - started}`
+      throw new Error({ code: "unsafe", detail: stderr.trim() ? `${diagnostic}; stderr=${stderr.trim()}` : diagnostic })
+    }
   } finally {
-    clearTimeout(timer)
-    stop()
+    clearTimeout(deadline)
+    clearTimeout(join.timer)
+    if (!state.closed) child.kill("SIGKILL")
   }
 }

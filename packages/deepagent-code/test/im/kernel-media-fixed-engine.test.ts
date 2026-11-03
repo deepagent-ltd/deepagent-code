@@ -101,4 +101,4 @@ test("fixed engine serially completes private media through the official lib, re
     native.server.stop(true)
     await fs.rm(directory, { recursive: true, force: true })
   }
-}, 10000)
+}, process.platform === "win32" ? 90_000 : 10_000)
