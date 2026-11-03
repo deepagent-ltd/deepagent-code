@@ -382,7 +382,13 @@ function windowsPrivateEntriesInvocation(systemRoot: string, entries: readonly W
 async function windowsPrivateEntries(entries: readonly WindowsPrivateEntry[]) {
   const invocation = windowsPrivateEntriesInvocation(process.env.SystemRoot ?? "", entries)
   const started = Date.now()
-  const child = spawn(invocation.cmd[0], invocation.cmd.slice(1), {
+  const preferred = path.win32.join(path.win32.parse(invocation.cmd[0]).root, "Program Files", "PowerShell", "7", "pwsh.exe")
+  const executable = await fs.realpath(preferred).then(
+    (candidate) => path.win32.normalize(candidate).toLowerCase() === path.win32.normalize(preferred).toLowerCase()
+      ? preferred
+      : invocation.cmd[0],
+  ).catch(() => invocation.cmd[0])
+  const child = spawn(executable, invocation.cmd.slice(1), {
     env: invocation.env,
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
@@ -417,7 +423,7 @@ async function windowsPrivateEntries(entries: readonly WindowsPrivateEntry[]) {
     ])
     if (!state.closed || state.timedOut || code !== 0) {
       const outcome = state.timedOut ? "timeout" : state.spawnError ? "spawn-error" : !state.closed ? "close-unknown" : "exit"
-      const diagnostic = `${outcome}; exitCode=${code}; elapsedMs=${Date.now() - started}`
+      const diagnostic = `${outcome}; executable=${path.win32.basename(executable)}; exitCode=${code}; elapsedMs=${Date.now() - started}`
       throw new Error({ code: "unsafe", detail: stderr.trim() ? `${diagnostic}; stderr=${stderr.trim()}` : diagnostic })
     }
   } finally {
