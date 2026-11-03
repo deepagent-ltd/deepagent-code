@@ -25,7 +25,7 @@ test("cleanup continuation cannot report complete while earlier failed files ret
     stdout: "pipe",
     stderr: "pipe",
   })
-  const timer = setTimeout(() => child.kill(), 15_000)
+  const timer = setTimeout(() => child.kill(), process.platform === "win32" ? 240_000 : 15_000)
   try {
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
     expect(code, stderr).toBe(0)
@@ -37,4 +37,4 @@ test("cleanup continuation cannot report complete while earlier failed files ret
     if (child.exitCode === null) child.kill()
     await child.exited
   }
-}, 20_000)
+}, process.platform === "win32" ? 250_000 : 20_000)

@@ -62,6 +62,6 @@ const result = await Effect.runPromise(
     assert.equal((yield* db.select().from(AttachmentTable)).filter((row) => row.deleted_at === null).length, 0)
     assert.equal(yield* Effect.promise(() => fs.readFile(userFile, "utf8")), "preserve")
     return { fixture: "media-cleanup-status", failedReservationsHeld: 32, tombstones: 33, falseComplete: false, actualFiles: true, physicalUserFilePreserved: true }
-  }).pipe(Effect.provide(Layer.provideMerge(IMRepositoryLive, Database.layerFromPath(path.join(root, "media.sqlite"))))),
+  }).pipe(Effect.provide(Layer.provideMerge(IMRepositoryLive, Database.layerFromPath(path.join(root, "media.sqlite")))), Effect.scoped),
 )
 console.log(JSON.stringify(result))

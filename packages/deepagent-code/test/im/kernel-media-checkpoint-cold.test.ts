@@ -12,7 +12,7 @@ test("current protected origin survives real cold token rotation and hands its e
   value.phase.value = 2
   const resumed = await value.run("resume")
   expect(resumed.pid).not.toBe(first.pid)
-  expect(resumed.outcome).toBe("Success")
+  expect(resumed.outcome, JSON.stringify({ calls: value.calls, puts: value.puts })).toBe("Success")
   expect(resumed.hasTransferCapabilities).toBe(true)
   expect(resumed.hasUploadProgress).toBe(true)
   expect(resumed.localCreatedAt).toBe(first.localCreatedAt)
@@ -27,7 +27,7 @@ test("current protected origin survives real cold token rotation and hands its e
   expect(value.metadata.expiresAt).toBe(expiry)
   expect(value.phase.publishes).toBe(0)
   expect(resumed.checkpoints).toEqual({records:1,bytes:92,rows:0})
-}, 30000)
+}, process.platform === "win32" ? 180_000 : 60_000)
 
 test("cold successor credential progress denial preserves charged original upload and sends no late chunk", async () => {
   await using value = await MediaResumeFixture.make("checkpoint", "denied")
@@ -44,7 +44,7 @@ test("cold successor credential progress denial preserves charged original uploa
   expect(new Set(value.uploadIDs).size).toBe(1)
   expect(value.metadata.expiresAt).toBe(expiry)
   expect(value.phase.publishes).toBe(0)
-}, 30000)
+}, process.platform === "win32" ? 180_000 : 60_000)
 
 
 

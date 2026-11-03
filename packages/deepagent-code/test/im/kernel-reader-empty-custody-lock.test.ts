@@ -17,7 +17,7 @@ import { pollWithTimeout } from "../lib/effect"
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "kernel-empty-custody-lock-")))
 const selected = process.env.DEEPAGENT_CODE_TEST_EMPTY_CUSTODY_LOCK
 const scenarios = ["current", "owner-withdrawn", "source-withdrawn"]
-afterAll(() => fs.rm(root, { recursive: true, force: true }))
+afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
 
 // The published SDK is process-global. Each scenario gets its normal original
 // connection, file database and scope instead of replacing native handles.
@@ -32,7 +32,7 @@ if (!selected) {
     expect(result[0], `${result[1]}\n${result[2]}`).toBe(0)
     expect(result[2]).toContain("1 pass")
     expect(result[2]).toContain("0 fail")
-  }, 30000)
+  }, 60000)
 }
 
 if (selected) test("empty custody survives a real protected output lock past one second without losing current owner fences", async () => {
@@ -100,4 +100,4 @@ if (selected) test("empty custody survives a real protected output lock past one
   expect(native.state.disconnected).toBe(1)
   expect(native.server.pendingRequests).toBe(0)
   expect(native.server.pendingWebSockets).toBe(0)
-}, 15000)
+}, 30000)

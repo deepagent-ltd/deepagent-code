@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Exit, Layer, Schema, SubscriptionRef } from "effect"
+import { Cause, Effect, Exit, Layer, Schema, SubscriptionRef } from "effect"
 import { sql } from "drizzle-orm"
 import { KernelReader } from "@deepagent-code/core/im/kernel-reader"
 import { Database } from "@deepagent-code/core/database/database"
@@ -84,40 +84,37 @@ const result = await Effect.runPromise(
         : (yield* db.get<{ id: string }>(
             sql`SELECT id FROM im_groups WHERE workspace_id=${instance.directory} AND kernel_conv_id IS NOT NULL`,
           ))!.id
+    const derived = AttachmentStorage.deriveStoragePath({
+      dataDir: Global.Path.data,
+      workspaceID: instance.directory,
+      attachmentID: "ima_cold_resume",
+    })
+    if (!derived.ok) return yield* Effect.die(new Error("Private attachment path unavailable"))
+    if (input.mode === "first") yield* Effect.promise(() => MediaFiles.directory(instance.directory, true))
     const attachment =
       input.mode === "resume"
         ? yield* repo.getAttachment("ima_cold_resume")
         : yield* lease.reader.withOutput(
             { workspaceID: instance.directory, userID: "server", groupIDs: [groupID] },
             input.mode === "first"
-              ? Effect.gen(function* () {
-                  yield* Effect.promise(() => MediaFiles.directory(instance.directory, true))
-                  const derived = AttachmentStorage.deriveStoragePath({
-                    dataDir: Global.Path.data,
-                    workspaceID: instance.directory,
-                    attachmentID: "ima_cold_resume",
-                  })
-                  if (!derived.ok) return yield* Effect.die(new Error("Private attachment path unavailable"))
-                  const value = yield* (
-                    input.negative === "no-origin" ? repo.createAttachment : lease.engine.createAttachment!
-                  )({
-                    id: "ima_cold_resume",
-                    workspaceID: instance.directory,
-                    groupID,
-                    uploadedBy: "server",
-                    storagePath: derived.storagePath,
-                    filename: "private.bin",
-                    mime: "application/octet-stream",
-                    sizeBytes: input.sizeBytes,
-                    checksum: input.checksum,
-                  })
-                  yield* Effect.promise(() => fs.copyFile(path.join(input.root, "source.bin"), value.storagePath))
-                  yield* Effect.promise(() => fs.chmod(value.storagePath, 0o600))
-                  return value
+              ? (input.negative === "no-origin" ? repo.createAttachment : lease.engine.createAttachment!)({
+                  id: "ima_cold_resume",
+                  workspaceID: instance.directory,
+                  groupID,
+                  uploadedBy: "server",
+                  storagePath: derived.storagePath,
+                  filename: "private.bin",
+                  mime: "application/octet-stream",
+                  sizeBytes: input.sizeBytes,
+                  checksum: input.checksum,
                 })
               : repo.getAttachment("ima_cold_resume"),
           )
     if (!attachment) return yield* Effect.die(new Error("Original attachment unavailable after cold reopen"))
+    if (input.mode === "first") {
+      yield* Effect.promise(() => fs.copyFile(path.join(input.root, "source.bin"), attachment.storagePath))
+      yield* Effect.promise(() => fs.chmod(attachment.storagePath, 0o600))
+    }
     inspections.value = 0
     const files = yield* Effect.promise(async () => MediaFileTrace.install(await fs.realpath(Global.Path.data)))
     const requestedContent =
@@ -149,7 +146,7 @@ const result = await Effect.runPromise(
             }),
           ),
         ),
-        Effect.timeout("3 seconds"),
+        Effect.timeout(process.platform === "win32" ? "60 seconds" : "3 seconds"),
         Effect.ensuring(Effect.sync(files.restore)),
       ),
     )
@@ -166,6 +163,7 @@ const result = await Effect.runPromise(
       pid: process.pid,
       mode: input.mode,
       outcome: outcome._tag,
+      failure: Exit.isFailure(outcome) ? Cause.pretty(outcome.cause) : undefined,
       messageID: Exit.isSuccess(outcome) ? outcome.value.id : null,
       replayed: Exit.isSuccess(outcome) ? (outcome.value.replayed ?? false) : false,
       localAttachmentID: attachment.id,

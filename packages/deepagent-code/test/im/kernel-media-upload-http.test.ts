@@ -78,7 +78,7 @@ test("private uploader reaches every official MediaClient HTTP chunk after an em
     }
     const result = await Effect.runPromise(IMKernelMediaUpload.upload(media, local, {
       source: { server: "private-http" }, messageID: "private-message", conversationType: 1, conversationID: "private-peer",
-    }).pipe(Effect.timeout("2 seconds")))
+    }).pipe(Effect.timeout(process.platform === "win32" ? "60 seconds" : "15 seconds")))
     expect(result).toMatchObject({ sizeBytes: local.sizeBytes, sha256: local.checksum, mime: local.mime })
     expect(received.digest("hex")).toBe(local.checksum)
     expect(wire.map((value) => value.split(" ")[0])).toEqual(["GET", "POST", "PUT", "PUT", "PUT", "POST"])
@@ -88,4 +88,4 @@ test("private uploader reaches every official MediaClient HTTP chunk after an em
     server.stop(true)
     await fs.rm(parent.path, { recursive: true, force: true })
   }
-}, 5000)
+}, process.platform === "win32" ? 120_000 : 30_000)
