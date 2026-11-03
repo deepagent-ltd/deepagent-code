@@ -149,8 +149,12 @@ export namespace SecretStore {
           return fs.readFileSync(filePath)
         } catch (error) {
           // A damaged or unreadable store must never become an empty replacement.
-          if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+          if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+            // Windows also reports ENOENT when an ancestor is a regular file.
+            const parent = fs.statSync(path.dirname(filePath), { throwIfNoEntry: false })
+            if (parent && !parent.isDirectory()) throw new FileError({ reason: "io" })
             return undefined
+          }
           throw new FileError({ reason: "io" })
         }
       })()
