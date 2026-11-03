@@ -14,12 +14,10 @@ test("fixed resolver cannot search empty or relative PATH entries or fall throug
   expect(await FixedWhich.find("synthetic-command", { cwd: "", PATH: root })).toBeUndefined()
   expect(await FixedWhich.find("synthetic-command", { cwd: root, PATH: root, platform: "win32" })).toBeUndefined()
   expect(await FixedWhich.find("directory", { cwd: root, PATH: root })).toBeUndefined()
-  expect(await FixedWhich.find("synthetic-command", { cwd: root, PATH: root })).toBe(
-    path.join(root, "synthetic-command"),
-  )
-  expect(await FixedWhich.find("./synthetic-command", { cwd: root, PATH: "/bin" })).toBe(
-    path.join(root, "synthetic-command"),
-  )
+  // The fixed resolver deliberately refuses execution on Windows, including absolute paths.
+  const resolved = process.platform === "win32" ? undefined : path.join(root, "synthetic-command")
+  expect(await FixedWhich.find("synthetic-command", { cwd: root, PATH: root })).toBe(resolved)
+  expect(await FixedWhich.find("./synthetic-command", { cwd: root, PATH: root })).toBe(resolved)
   expect(await FixedWhich.find("sh;touch marker", { cwd: root, PATH: "/bin" })).toBeUndefined()
   expect(
     await fs.stat(path.join(root, "marker")).then(

@@ -221,9 +221,14 @@ describe("all real LLM test runner", () => {
       }),
     ).rejects.toThrow("Official Kimi live tests require https://api.moonshot.ai/v1")
 
-    await chmod(file, 0o644)
-    await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file })).rejects.toThrow("chmod 600")
-    await chmod(file, 0o600)
+    if (process.platform !== "win32") {
+      await chmod(file, 0o644)
+      await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file })).rejects.toThrow("chmod 600")
+      await chmod(file, 0o600)
+    }
+    await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: directory.path })).rejects.toThrow(
+      "not a regular file",
+    )
     await Bun.write(file, "first-line\nsecond-line\n")
     await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file })).rejects.toThrow(
       "exactly one non-empty line",
@@ -341,7 +346,7 @@ describe("all real LLM test runner", () => {
 
   test("redacts host paths and credentials from shared live artifacts", async () => {
     await using directory = await tmpdir()
-    const apiKey = `secret-${crypto.randomUUID()}`
+    const apiKey = `secret-\\"-${crypto.randomUUID()}`
     const hostPath = path.join(os.tmpdir(), `host-${crypto.randomUUID()}`, "fixture.txt")
     await writeLiveArtifact({ artifactDirectory: directory.path, apiKey }, "redaction", {
       apiKey,
@@ -355,6 +360,7 @@ describe("all real LLM test runner", () => {
     if (process.env.HOME) expect(artifact).not.toContain(process.env.HOME)
     expect(artifact).toContain("<redacted>")
     expect(artifact).toContain("<tmp>")
+    expect(JSON.parse(artifact)).toMatchObject({ apiKey: "<redacted>", hostPath: `<tmp>${path.sep}${path.relative(os.tmpdir(), hostPath)}` })
   })
 
   test("redacts suite-owned hidden markers and large synthetic prompt bodies", async () => {

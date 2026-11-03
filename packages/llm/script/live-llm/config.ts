@@ -234,11 +234,15 @@ export async function writeLiveArtifact(
   const evidence = isRecord(artifact)
     ? { ...artifact, provenance: await liveArtifactProvenance(options) }
     : { artifact, provenance: await liveArtifactProvenance(options) }
+  const jsonStringContent = (text: string) => JSON.stringify(text).slice(1, -1)
   const serialized = replacements
     .filter((item) => item.value.length > 1)
     .sort((a, b) => b.value.length - a.value.length)
     .reduce(
-      (contents, item) => contents.replaceAll(item.value, item.replacement),
+      (contents, item) => {
+        const replacement = jsonStringContent(item.replacement)
+        return contents.replaceAll(jsonStringContent(item.value), () => replacement)
+      },
       JSON.stringify(evidence, undefined, 2),
     )
   await Bun.write(path.join(config.artifactDirectory, `${suite}.json`), `${serialized}\n`)
