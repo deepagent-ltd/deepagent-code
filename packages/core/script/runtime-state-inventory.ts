@@ -8566,7 +8566,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
   (
     [
       [
-        "packages/deepagent-code/src/attention/task-tui-private.ts:closeBridge",
+        "packages/deepagent-code/src/attention/task-tui-private-bootstrap.ts:closeBridge",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
@@ -8578,7 +8578,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/attention/task-tui-private.ts:closure@39:58.requests",
+        "packages/deepagent-code/src/attention/task-tui-private-bootstrap.ts:closure@18:37.requests",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
@@ -8590,7 +8590,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/attention/task-tui-private.ts:closure@82:121.controller",
+        "packages/deepagent-code/src/attention/task-tui-private-bootstrap.ts:closure@61:100.controller",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
@@ -8602,7 +8602,7 @@ const reviewedHostOriginalLifetimes: Readonly<Record<string, RuntimeStateAudit>>
         ],
       ],
       [
-        "packages/deepagent-code/src/attention/task-tui-private.ts:installed",
+        "packages/deepagent-code/src/attention/task-tui-private-bootstrap.ts:installed",
         [
           "actual TUI worker parentPort private bootstrap",
           "one worker bootstrap/current original directory/OS principal; controller per original accepted request",
