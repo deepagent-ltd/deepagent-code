@@ -31,6 +31,11 @@ import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
 import { LocalAuthority } from "@/installation/local-authority"
+import { NativeWindowsBootstrap } from "@/installation/windows-native-bootstrap"
+import { NativeWindowsWorkFactory } from "@/installation/windows-work-factory"
+import { WindowsPrivateStorage } from "@/installation/windows-private-storage"
+import { WindowsSettingsStorage } from "@/installation/windows-settings-storage"
+import { McpWindowsStorage } from "@/mcp/windows-storage"
 import { Database } from "@deepagent-code/core/database/database"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { WorkAuthority } from "@deepagent-code/core/session/work-authority"
@@ -92,20 +97,43 @@ if (mode !== "cold") {
   ])
 }
 const counts = { put: 0, get: 0, network: 0 }
-const actual = SecretStore.fileBackend()
-const backend: SecretStore.Backend = {
-  ...actual,
-  put: async (account, value) => {
-    counts.put++
-    await actual.put(account, value)
-    if (mode === "stored-gap" && counts.put === 2)
-      await fs.writeFile(path.join(a, "deepagent-code.json"), original("external-edit"))
-  },
-  get: async (account) => {
-    counts.get++
-    return actual.get(account)
-  },
-}
+const windows = process.platform === "win32"
+const nativeStorage = windows ? Layer.effectContext(Effect.gen(function* () {
+  const context = yield* Layer.build(WindowsSettingsStorage.standaloneLayer)
+  const bootstrap = Context.getOrUndefined(context, NativeWindowsBootstrap.Service)
+  assert(bootstrap, "Original Native MCP bootstrap is required")
+  yield* bootstrap.requireCurrent
+  const native = Layer.succeed(NativeWindowsBootstrap.Service, bootstrap)
+  yield* WindowsPrivateStorage.make("mcp_secret_envelopes", true).pipe(
+    Effect.asVoid,
+    Effect.scoped,
+    Effect.provide(native),
+  )
+  const work = yield* Layer.build(NativeWindowsWorkFactory.layer.pipe(Layer.provide(native)))
+  const mcp = yield* Layer.build(McpWindowsStorage.layer.pipe(
+    Layer.provide(native),
+    Layer.provide(Layer.succeedContext(work)),
+  ))
+  return Context.merge(context, mcp)
+})) : Layer.empty
+const secretStore = Layer.effect(SecretStore.Service, Effect.gen(function* () {
+  const custody = yield* McpWindowsStorage.Current
+  if (windows) assert(custody, "Original Native MCP storage is required")
+  const actual = windows ? SecretStore.windowsBackend(custody) : SecretStore.fileBackend()
+  return SecretStore.make({
+    ...actual,
+    put: async (account, value) => {
+      counts.put++
+      await actual.put(account, value)
+      if (mode === "stored-gap" && counts.put === 2)
+        await fs.writeFile(path.join(a, "deepagent-code.json"), original("external-edit"))
+    },
+    get: async (account) => {
+      counts.get++
+      return actual.get(account)
+    },
+  })
+}))
 class IndependentGlobalConfig extends Context.Service<IndependentGlobalConfig, Config.Interface>()(
   "test/IndependentGlobalConfig",
 ) {}
@@ -139,7 +167,7 @@ const common = Layer.mergeAll(
   AccountRepo.defaultLayer,
   LocationIdentity.defaultLayer,
   Project.defaultLayer,
-  SecretStore.testLayer(backend),
+  secretStore,
   FSUtil.defaultLayer,
   EffectFlock.defaultLayer,
 )
@@ -167,9 +195,16 @@ const instances = InstanceStore.defaultLayer.pipe(
     ),
   ),
 )
-const layer = Layer.mergeAll(runtimeLayer, instances)
+const layer = Layer.mergeAll(runtimeLayer, instances).pipe(Layer.provideMerge(nativeStorage))
 const result = await Effect.runPromiseExit(
   Effect.gen(function* () {
+    const context = (yield* Effect.context<never>()).pipe(
+      Context.pick(NativeWindowsBootstrap.Service, WindowsSettingsStorage.Current, McpWindowsStorage.Current),
+    )
+    const runPromise = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.runPromise(windows ? effect.pipe(Effect.provide(context)) : effect)
+    const privateSettings = yield* WindowsSettingsStorage.Current
+    const privateMcp = yield* McpWindowsStorage.Current
     const scopes = yield* SecretRefScope.Service
     const migration = yield* McpSecretMigration.Service
     const secrets = yield* SecretStore.Service
@@ -208,6 +243,7 @@ const result = await Effect.runPromiseExit(
           ),
         )
         Global.Path.config = firstDirectory
+        if (windows) yield* WindowsPrivateStorage.make("settings", true).pipe(Effect.asVoid, Effect.scoped)
         const first = Context.get(
           yield* Layer.build(Layer.fresh(Config.layer).pipe(Layer.provide(authorities))),
           Config.Service,
@@ -215,6 +251,7 @@ const result = await Effect.runPromiseExit(
         assert.equal((yield* first.getGlobal()).username, "fixture-domain-a")
         yield* Effect.promise(() => fs.unlink(path.join(firstDirectory, "config.jsonc")))
         Global.Path.config = secondDirectory
+        if (windows) yield* WindowsPrivateStorage.make("settings", true).pipe(Effect.asVoid, Effect.scoped)
         const second = Context.get(
           yield* Layer.build(Layer.fresh(Config.layer).pipe(Layer.provide(authorities))),
           Config.Service,
@@ -239,7 +276,7 @@ const result = await Effect.runPromiseExit(
       )
     }
     const inDirectory = <A, E>(effect: Effect.Effect<A, E>, directory: string) =>
-      Effect.runPromise(effect.pipe(Effect.provideService(SecretRefScope.CliDirectory, directory)))
+      runPromise(effect.pipe(Effect.provideService(SecretRefScope.CliDirectory, directory)))
     const setup = (directory: string) => inDirectory(scopes.capture("same", true), directory)
     const migrate = async (name: string, directory: string, requestID: string) => {
       const preview = await inDirectory(migration.preview(name), directory)
@@ -301,9 +338,9 @@ const result = await Effect.runPromiseExit(
             return { mode, concurrentLoadCurrent: true, put: counts.put, network: counts.network }
           }
           const location =
-            mode === "global-state-cache" ? await Effect.runPromise(instances.load({ directory: a })) : undefined
+            mode === "global-state-cache" ? await runPromise(instances.load({ directory: a })) : undefined
           if (location && globalReader) {
-            const before = await Effect.runPromise(
+            const before = await runPromise(
               globalReader.get().pipe(Effect.provideService(InstanceRef, location)),
             )
             assert.equal(
@@ -335,7 +372,14 @@ const result = await Effect.runPromiseExit(
           const journals = SettingsTransaction.paths()
           const operation = await fs.readFile(journals.operation, "utf8")
           if (mode === "global-settings-unsettled") {
-            await fs.writeFile(journals.settings, "{}", { mode: 0o600 })
+            if (privateSettings) {
+              await runPromise(Effect.gen(function* () {
+                const current = yield* privateSettings.read("settings.json")
+                yield* privateSettings.publish("settings.json", "{}", current?.witness ?? null)
+              }))
+            } else {
+              await fs.writeFile(journals.settings, "{}", { mode: 0o600 })
+            }
             const files = [
               journals.operation,
               journals.receipt,
@@ -374,15 +418,19 @@ const result = await Effect.runPromiseExit(
             // Settings operation and config bytes remain exactly as published.
             const file = path.join(Global.Path.config, "mcp-secret-migration.json")
             const ledger = JSON.parse(await fs.readFile(file, "utf8"))
-            await fs.writeFile(
-              file,
-              JSON.stringify({
-                ...ledger,
-                receipts: ledger.receipts.map((item: { requestID: string }) =>
-                  item.requestID === "global-settings-request" ? { ...item, state: "stored" } : item,
-                ),
-              }),
-            )
+            const stored = JSON.stringify({
+              ...ledger,
+              receipts: ledger.receipts.map((item: { requestID: string }) =>
+                item.requestID === "global-settings-request" ? { ...item, state: "stored" } : item,
+              ),
+            })
+            if (privateMcp) {
+              const current = await privateMcp.read("mcp_secret_migration")
+              assert(current)
+              await privateMcp.publish("mcp_secret_migration", stored, current.witness)
+            } else {
+              await fs.writeFile(file, stored)
+            }
             await fs.unlink(journals.receipt)
             assert.equal(
               await fs.stat(journals.receipt).then(
@@ -400,7 +448,7 @@ const result = await Effect.runPromiseExit(
           await inDirectory(cfg.getGlobal(), a)
           await inDirectory(SettingsStore.readEffect, a)
           if (location && globalReader) {
-            const after = await Effect.runPromise(globalReader.get().pipe(Effect.provideService(InstanceRef, location)))
+            const after = await runPromise(globalReader.get().pipe(Effect.provideService(InstanceRef, location)))
             const value = after.mcp?.same && "headers" in after.mcp.same && after.mcp.same.headers?.Authorization
             assert.equal(typeof value, "string")
             assert(
@@ -421,16 +469,16 @@ const result = await Effect.runPromiseExit(
             )
           }
           if (authentication) {
-            await Effect.runPromise(projects.fromDirectory(a))
-            const actual = await Effect.runPromise(projects.observeDirectory(a))
+            await runPromise(projects.fromDirectory(a))
+            const actual = await runPromise(projects.observeDirectory(a))
             assert(actual.project)
-            const snapshot = await Effect.runPromise(cfg.readonlySnapshot!(actual))
+            const snapshot = await runPromise(cfg.readonlySnapshot!(actual))
             const entry = snapshot.config.mcp?.same
             assert(entry && "type" in entry)
             const before = await fs.readFile(path.join(Global.Path.config, "config.jsonc"))
-            assert.equal(await Effect.runPromise(instances.peek(a)), undefined)
+            assert.equal(await runPromise(instances.peek(a)), undefined)
             assert.deepEqual(
-              await Effect.runPromise(
+              await runPromise(
                 authentication.metadataAt("same", entry, {
                   directory: actual.directory,
                   projectID: actual.project.id,
@@ -440,7 +488,7 @@ const result = await Effect.runPromiseExit(
               ),
               { tokens: false, expired: false, unknown: false, legacy: false },
             )
-            assert.equal(await Effect.runPromise(instances.peek(a)), undefined)
+            assert.equal(await runPromise(instances.peek(a)), undefined)
             assert.deepEqual(await fs.readFile(path.join(Global.Path.config, "config.jsonc")), before)
           }
           const put = counts.put
@@ -546,12 +594,12 @@ const result = await Effect.runPromiseExit(
           const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => web.handler(request) })
           const executionCensus = () =>
             Promise.all([
-              Effect.runPromise(database.db.select({ count: count() }).from(SessionTable)),
-              Effect.runPromise(database.db.select({ count: count() }).from(SessionInputTable)),
-              Effect.runPromise(database.db.select({ count: count() }).from(WorkExecutionTable)),
-              Effect.runPromise(database.db.select({ count: count() }).from(WorkDispatchReservationTable)),
-              Effect.runPromise(database.db.select({ count: count() }).from(V2ProviderTurnReceiptTable)),
-              Effect.runPromise(database.db.select({ count: count() }).from(WorkCountAcquisitionTable)),
+              runPromise(database.db.select({ count: count() }).from(SessionTable)),
+              runPromise(database.db.select({ count: count() }).from(SessionInputTable)),
+              runPromise(database.db.select({ count: count() }).from(WorkExecutionTable)),
+              runPromise(database.db.select({ count: count() }).from(WorkDispatchReservationTable)),
+              runPromise(database.db.select({ count: count() }).from(V2ProviderTurnReceiptTable)),
+              runPromise(database.db.select({ count: count() }).from(WorkCountAcquisitionTable)),
             ]).then((rows) => rows.map((row) => row[0].count))
           const call = async (method: string, suffix: string, directory = a, body?: object, authorized = true) => {
             const url = new URL(`/mcp/same/${suffix}`, server.url)
@@ -620,7 +668,7 @@ const result = await Effect.runPromiseExit(
             assert.equal((await call("POST", "credentials/api-first/reconcile")).status, 200)
             assert.equal(counts.put, 2)
             assert.deepEqual(await awaitBytes(), after)
-            const old = await Effect.runPromise(
+            const old = await runPromise(
               identities.resolve({
                 boundary: { kind: "implicit_local" },
                 directory: AbsolutePath.make(b),
@@ -664,7 +712,15 @@ const result = await Effect.runPromiseExit(
           assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
           const initialized = await inDirectory(migration.initialize("same"), a)
           assert.deepEqual(initialized, { name: "same", source: path.join(a, "deepagent-code.json") })
-          assert.equal((await fs.stat(LocalAuthority.installationPath())).mode & 0o777, 0o600)
+          if (windows) {
+            await runPromise(Effect.gen(function* () {
+              const storage = yield* WindowsPrivateStorage.make("local_operator")
+              const installation = yield* storage.read("installation.json")
+              assert(installation && WindowsPrivateStorage.describe(installation.witness))
+            }).pipe(Effect.scoped))
+          } else {
+            assert.equal((await fs.stat(LocalAuthority.installationPath())).mode & 0o777, 0o600)
+          }
           assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
           assert.equal(counts.put, 0)
           const committed = await migrate("same", a, "first-empty")
@@ -682,9 +738,9 @@ const result = await Effect.runPromiseExit(
           }
         }
         if (mode === "binding-repair" || mode === "binding-unknown") {
-          await Effect.runPromise(LocalAuthority.ensurePrivateInstallation())
+          await runPromise(LocalAuthority.ensurePrivateInstallation())
           const boundary = { kind: "implicit_local" as const }
-          const old = await Effect.runPromise(
+          const old = await runPromise(
             identities.resolve({
               boundary,
               directory: AbsolutePath.make(a),
@@ -703,7 +759,7 @@ const result = await Effect.runPromiseExit(
           assert.deepEqual(await fs.readFile(path.join(a, "deepagent-code.json")), before)
           assert.equal(counts.put, 0)
           if (mode === "binding-unknown") {
-            await Effect.runPromise(
+            await runPromise(
               WorkAuthorityFixture.initialize().pipe(Effect.provideService(Database.Service, database)),
             )
             const original = WorkAuthorityFixture.binding("binding-unknown")
@@ -716,27 +772,27 @@ const result = await Effect.runPromiseExit(
                 projectScopeKey: old.projectScopeKey,
               },
             }
-            await Effect.runPromise(
+            await runPromise(
               WorkAuthority.reserve(database.db, { binding, now: WorkAuthorityFixture.NOW }).pipe(
                 Effect.provide(WorkAuthorityFixture.verifier),
               ),
             )
-            await Effect.runPromise(
+            await runPromise(
               database.db
                 .update(WorkExecutionTable)
                 .set({ outcome: "unknown" })
                 .where(eq(WorkExecutionTable.work_id, binding.workID))
                 .run(),
             )
-            const work = await Effect.runPromise(database.db.select().from(WorkExecutionTable))
+            const work = await runPromise(database.db.select().from(WorkExecutionTable))
             const blocked = await inDirectory(migration.repairBinding(preview.previewID).pipe(Effect.exit), a)
             assert(Exit.isFailure(blocked))
             const error = Cause.squash(blocked.cause)
             assert(error instanceof McpSecretMigration.Error)
             assert.equal(error.reason, "work_unsettled")
-            assert.deepEqual(await Effect.runPromise(database.db.select().from(WorkExecutionTable)), work)
+            assert.deepEqual(await runPromise(database.db.select().from(WorkExecutionTable)), work)
             assert.deepEqual(
-              await Effect.runPromise(
+              await runPromise(
                 identities.inspectObservedProjectBinding({ boundary, directory: AbsolutePath.make(a) }),
               ),
               preview.old,
@@ -828,7 +884,7 @@ const result = await Effect.runPromiseExit(
           b,
         )
         assert(Exit.isFailure(borrowed))
-        const bare = await Effect.runPromise(secrets.resolve(ref).pipe(Effect.exit))
+        const bare = await runPromise(secrets.resolve(ref).pipe(Effect.exit))
         assert(Exit.isFailure(bare))
         const before = await awaitBytes()
         const put = counts.put
@@ -846,7 +902,7 @@ const result = await Effect.runPromiseExit(
           before.mcp.same.oauth = false
           before.mcp.same.enabled = true
           await fs.writeFile(file, JSON.stringify(before))
-          const result = await Effect.runPromise(instances.provide({ directory: b }, mcp.add("same", before.mcp.same)))
+          const result = await runPromise(instances.provide({ directory: b }, mcp.add("same", before.mcp.same)))
           assert("same" in result.status)
           assert.equal(result.status.same.status, "failed")
           assert.equal(physical.http, 0)

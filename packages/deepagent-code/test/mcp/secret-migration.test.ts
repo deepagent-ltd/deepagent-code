@@ -1,26 +1,54 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "../fixture/fixture"
+import type { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
+
+const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const directory = path.join(process.env.RUNNER_TEMP ?? path.resolve(import.meta.dir, "../../.artifacts"),
+    "windows-native-mcp-migration")
+  await fs.mkdir(directory, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: path.join(import.meta.dir, "fixture/secret-migration-process.ts"),
+    extraSources: [import.meta.path, ...["auth", "npm"].map((name) => path.resolve(import.meta.dir, `../fake/${name}.ts`))],
+  })
+}, 240_000)
+afterAll(async () => { await native.cohort?.dispose() })
+
+async function migrationRoot() {
+  if (!native.cohort) return tmpdir()
+  const root = await fs.mkdtemp(path.join(native.cohort.root, "mcp-migration-"))
+  return { path: root, async [Symbol.asyncDispose]() { await fs.rm(root, { recursive: true, force: true }) } }
+}
 
 async function child(root: string, mode: string) {
   const home = path.join(root, "private-home")
   await fs.mkdir(home, { recursive: true, mode: 0o700 })
+  const env = {
+    HOME: home,
+    DEEPAGENT_CODE_TEST_HOME: home,
+    XDG_CONFIG_HOME: path.join(home, "config"),
+    XDG_DATA_HOME: path.join(home, "data"),
+    XDG_STATE_HOME: path.join(home, "state"),
+    XDG_CACHE_HOME: path.join(home, "cache"),
+    DEEPAGENT_CODE_DB: path.join(home, "database.sqlite"),
+    DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(home, "managed"),
+    DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
+  }
+  if (native.cohort) return native.cohort.run({
+    args: [root, mode],
+    env: { ...env, DEEPAGENT_CODE_HOME: path.join(home, ".deepagent", "code") },
+    inheritEnvironment: false,
+    milliseconds: 30_000,
+  })
   const process = Bun.spawn({
     cmd: [globalThis.process.execPath, path.join(import.meta.dir, "fixture/secret-migration-process.ts"), root, mode],
     cwd: path.resolve(import.meta.dir, "../.."),
-    env: {
-      PATH: globalThis.process.env.PATH,
-      HOME: home,
-      DEEPAGENT_CODE_TEST_HOME: home,
-      XDG_CONFIG_HOME: path.join(home, "config"),
-      XDG_DATA_HOME: path.join(home, "data"),
-      XDG_STATE_HOME: path.join(home, "state"),
-      XDG_CACHE_HOME: path.join(home, "cache"),
-      DEEPAGENT_CODE_DB: path.join(home, "database.sqlite"),
-      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(home, "managed"),
-      DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
-    },
+    env: { ...env, PATH: globalThis.process.env.PATH },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -46,7 +74,7 @@ function summary(stdout: string) {
 }
 
 test("explicit three-field migration uses actual private Config/Location/store and refuses borrowed or bare refs", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "positive")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -61,14 +89,14 @@ test("explicit three-field migration uses actual private Config/Location/store a
 }, 40_000)
 
 test("preview followed by a same-byte leaf replacement rejects before a scoped store put", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "changed")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ rejected: true, put: 0, network: 0 })
 }, 40_000)
 
 test("a stored/Config conflict is retained and a real cold process never blindly re-puts or rewrites it", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const first = await child(root.path, "stored-gap")
   expect(first.code, first.stderr).toBe(0)
   expect(summary(first.stdout)).toMatchObject({ state: "stored", put: 2, network: 0 })
@@ -78,14 +106,14 @@ test("a stored/Config conflict is retained and a real cold process never blindly
 }, 70_000)
 
 test("the original MCP runtime rejects a borrowed scoped reference before its owned HTTP transport sends", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "runtime")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ physicalHTTP: 0, network: 0, bareRejected: true })
 }, 40_000)
 
 test("an empty private HOME requires explicit init before readonly preview and confirmed migration", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "first-empty")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -101,7 +129,7 @@ test("an empty private HOME requires explicit init before readonly preview and c
 }, 40_000)
 
 test("an old registered-root binding requires explicit preview and repair before secret preview is available", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "binding-repair")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ sameScope: true, secretPreviewAvailable: true, put: 0, network: 0 })
@@ -110,14 +138,14 @@ test("an old registered-root binding requires explicit preview and repair before
 }, 40_000)
 
 test("explicit binding repair refuses actual unknown Work custody without changing the old binding", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "binding-unknown")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ rejected: true, code: "work_unsettled", put: 0, network: 0 })
 }, 40_000)
 
 test("global migration preserves the normal Settings transaction and exact request retry", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-settings")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -132,7 +160,7 @@ test("global migration preserves the normal Settings transaction and exact reque
 }, 40_000)
 
 test("global migration invalidates an independently warmed global configuration reader", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-cache")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -145,7 +173,7 @@ test("global migration invalidates an independently warmed global configuration 
 }, 40_000)
 
 test("readonly OAuth metadata resolves an owned migrated header without bootstrapping an instance", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "readonly-scoped")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -157,7 +185,7 @@ test("readonly OAuth metadata resolves an owned migrated header without bootstra
 }, 40_000)
 
 test("global migration reconciles the original Settings intent after config publication without another put", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-settings-gap")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -174,7 +202,7 @@ test("global migration reconciles the original Settings intent after config publ
 }, 40_000)
 
 test("committed global retry retains an unknown Settings outcome without changing original files", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-settings-unsettled")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -190,7 +218,7 @@ test("committed global retry retains an unknown Settings outcome without changin
 }, 40_000)
 
 test("global migration refreshes an independently warmed Location and preserves its project override", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-state-cache")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
@@ -202,14 +230,14 @@ test("global migration refreshes an independently warmed Location and preserves 
 }, 40_000)
 
 test("an invalidation concurrent with a cold global load preserves subsequent published reads", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-cache-race")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({ concurrentLoadCurrent: true, put: 0, network: 0 })
 }, 40_000)
 
 test("fresh config layers in different canonical profile domains invalidate independently", async () => {
-  await using root = await tmpdir()
+  await using root = await migrationRoot()
   const result = await child(root.path, "global-domain-cache")
   expect(result.code, result.stderr).toBe(0)
   expect(summary(result.stdout)).toMatchObject({
