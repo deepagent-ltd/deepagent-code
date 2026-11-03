@@ -37,7 +37,7 @@ test.each([
       XDG_DATA_HOME: path.join(root, "data"),
       XDG_CACHE_HOME: path.join(root, "cache"),
       XDG_STATE_HOME: path.join(root, "state"),
-      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+      DEEPAGENT_CODE_TEST_HOME: process.platform === "win32" ? root : path.join(root, "home"),
       DEEPAGENT_CODE_HOME: path.join(root, "data"),
       DEEPAGENT_CODE_DB: path.join(root, "authority.sqlite"),
       DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
@@ -53,6 +53,9 @@ test.each([
       const child = Bun.spawn(
         [
           process.execPath,
+          ...(process.platform === "win32"
+            ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+            : []),
           path.resolve(import.meta.dir, "../fixture/ordinary-agent-selection-host.ts"),
           root,
           scenario,
@@ -68,7 +71,12 @@ test.each([
       const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
       const timer = setTimeout(() => child.kill("SIGKILL"), 40_000)
       try {
-        return await child.exited
+        const status = await child.exited
+        if (status !== 0) {
+          const logs = (await output).join("\n")
+          console.error("ORDINARY_SELECTION_CHILD_FAILED", scenario, phase, status, logs.slice(-16_384))
+        }
+        return status
       } finally {
         clearTimeout(timer)
         await Bun.write(path.join(root, `${phase}.log`), (await output).join("\n"))
