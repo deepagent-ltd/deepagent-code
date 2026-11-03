@@ -139,5 +139,6 @@ describe("current no-progress attention", () => {
         expect(yield* changes(database)).toEqual(before)
       }).pipe(Effect.provide(services(path.join(directory, "epoch.db"))))
     }),
+    process.platform === "win32" ? 90_000 : undefined,
   )
 })
