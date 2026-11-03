@@ -18,7 +18,8 @@ void Log.init({ print: false })
 // because a previous test may have reset the flag back to false.
 // We also reset the database before each test to flush stale events emitted
 // by other test files that run concurrently in the full suite.
-const testTimeout = process.platform === "win32" ? 30_000 : 5_000
+// Real cold migration/bootstrap exceeds five seconds on shared runners.
+const testTimeout = 30_000
 let _savedExperimentalWorkspaces: boolean
 beforeEach(async () => {
   _savedExperimentalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
