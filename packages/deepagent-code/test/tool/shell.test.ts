@@ -137,7 +137,16 @@ const withShell = <A, E, R>(item: { label: string; shell: string }, self: Effect
       Shell.preferred.reset()
       return prev
     }),
-    () => self,
+    (): Effect.Effect<A, E, R | Config.Service> => {
+      if (process.platform !== "win32") return self
+      // Windows selects the configured shell and ignores an inherited SHELL.
+      return Effect.flatMap(Config.Service, (config) =>
+        self.pipe(Effect.provideService(Config.Service, {
+          ...config,
+          get: () => config.get().pipe(Effect.map((value) => ({ ...value, shell: item.shell }))),
+        })),
+      )
+    },
     (prev) =>
       Effect.sync(() => {
         if (prev === undefined) delete process.env.SHELL
@@ -203,11 +212,12 @@ describe("tool.shell", () => {
     ),
   )
 
-  each("appends the real non-zero exit code in the trailer", () =>
+  each("appends the real non-zero exit code in the trailer", (item) =>
     runIn(
       projectRoot,
       Effect.gen(function* () {
-        const result = yield* run({ command: "sh -c 'exit 3'", description: "Fail with 3" })
+        const command = item.label === "cmd" ? "exit /b 3" : PS.has(item.label) ? "exit 3" : "sh -c 'exit 3'"
+        const result = yield* run({ command, description: "Fail with 3" })
         expect(result.metadata.exit).toBe(3)
         expect(result.output).toContain("exit code: 3")
       }),
