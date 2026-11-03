@@ -164,7 +164,7 @@ describe("MigrationOrchestrator (W-02 M-2)", () => {
       const categories = new Map(advisory.entries.map((entry) => [entry.category, entry]))
       expect(categories.get("main_db")?.path).toBe(path.resolve(filename))
       expect(categories.get("restore_incident")?.note).toContain("NEVER deleted")
-      const residue = advisory.entries.filter((entry) => entry.category === "residue_candidate").map((entry) => path.basename(entry.path))
+      const residue = advisory.entries.filter((entry) => entry.category === "residue_candidate").map((entry) => path.basename(entry.path)).sort()
       expect(residue).toEqual(["old.bak", "repro.db"])
       expect(advisory.reclaimableBytes).toBe("repro residue".length + "bak residue".length)
       // Nothing was deleted by the advisory phase.

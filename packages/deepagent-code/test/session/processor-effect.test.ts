@@ -2832,9 +2832,34 @@ it.live("session.processor effect tests reset reasoning state across retries", (
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
+        const database = yield* Database.Service
+        const interrupted = defer<void>()
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.push(reply().reason("one").reset(), reply().reason("two").stop())
+        // Deliver the retryable provider error only after the first reasoning part exists.
+        yield* llm.push(
+          raw({
+            head: [
+              {
+                id: "chatcmpl-test",
+                object: "chat.completion.chunk",
+                choices: [{ delta: { role: "assistant", reasoning_content: "one" } }],
+              },
+            ],
+            wait: interrupted.promise,
+            tail: [
+              {
+                error: {
+                  message: JSON.stringify({
+                    type: "error",
+                    error: { code: "server_error", message: "Fixture interrupted reasoning" },
+                  }),
+                },
+              },
+            ],
+          }),
+          reply().reason("two").stop(),
+        )
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "reason")
@@ -2846,7 +2871,7 @@ it.live("session.processor effect tests reset reasoning state across retries", (
           model: mdl,
         })
 
-        const value = yield* handle.process({
+        const run = yield* handle.process({
           user: {
             id: parent.id,
             sessionID: chat.id,
@@ -2861,7 +2886,15 @@ it.live("session.processor effect tests reset reasoning state across retries", (
           system: [],
           messages: [{ role: "user", content: "reason" }],
           tools: {},
-        })
+        }).pipe(Effect.forkChild)
+        const first = yield* waitFor(
+          MessageV2.parts(msg.id).pipe(
+            Effect.map((parts) => parts.find((part) => part.type === "reasoning")),
+            Effect.provideService(Database.Service, database),
+          ),
+          "timed out waiting for first reasoning part",
+        ).pipe(Effect.ensuring(Effect.sync(() => interrupted.resolve())))
+        const value = yield* Fiber.join(run)
 
         const parts = yield* MessageV2.parts(msg.id)
         const reasoning = parts.filter((part): part is SessionV1.ReasoningPart => part.type === "reasoning")
@@ -2869,6 +2902,7 @@ it.live("session.processor effect tests reset reasoning state across retries", (
         expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(2)
         expect(reasoning.some((part) => part.text === "two")).toBe(true)
+        expect(reasoning.find((part) => part.text === "two")?.id).not.toBe(first.id)
         expect(reasoning.some((part) => part.text === "onetwo")).toBe(false)
       }),
     { config: (url) => providerCfg(url) },

@@ -171,8 +171,12 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
   const node = createServer()
   const upgrades = new Set<import("node:stream").Duplex>()
   node.on("upgrade", (_request, socket) => { upgrades.add(socket); socket.once("close", () => upgrades.delete(socket)) })
-  yield* Effect.addFinalizer(() => Effect.sync(() => node.closeAllConnections()))
-  yield* Effect.addFinalizer(() => Effect.sync(() => { upgrades.forEach((socket) => socket.destroy()); upgrades.clear() }))
+  const closeConnections = yield* Effect.cached(Effect.sync(() => {
+    node.closeAllConnections()
+    upgrades.forEach((socket) => socket.destroy())
+    upgrades.clear()
+  }))
+  yield* Effect.addFinalizer(() => closeConnections)
   const imOptions = { buildEngine: observeEngine(buildEngine), env: { DEEPAGENT_IM_KERNEL_MEDIA_PROFILE: "mysql-protected-media-v1" } }
   const imRuntime = HttpApiApp.createIMRuntimeLayer(imOptions, native.deviceLayer).pipe(Layer.provide(native.httpLayer))
   const serving = HttpRouter.serve(HttpApiApp.createRoutes(undefined, RuntimeFlags.layer({ v4FileUploadEnabled: true }), { imRuntime }), { disableListenLog: true, disableLogger: true }).pipe(Layer.provide(layerWebSocketConstructorGlobal),
@@ -197,6 +201,8 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
   const context = diagnostic ? Context.empty() : yield* Layer.build(Layer.mergeAll(instance, Project.defaultLayer, Session.defaultLayer, workspace, Database.defaultLayer, serving).pipe(
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_SERVER_PASSWORD: "private-http-media" }))),
   ))
+  // Finalizers run in reverse order. Close fixture connections before NodeHttpServer shuts down.
+  yield* Effect.addFinalizer(() => closeConnections)
   yield* phase("listener:started")
   const address = node.address()
   if (!normal && (!address || typeof address === "string")) return yield* Effect.die(new Error("Private HTTP listener unavailable"))

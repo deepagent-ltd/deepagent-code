@@ -15,13 +15,20 @@ export function start(options: { port: number; buildEngine: IMFacade.EngineBuild
     const node = createServer()
     const upgrades = new Set<Duplex>()
     node.on("upgrade", (_request, socket) => { upgrades.add(socket); socket.once("close", () => upgrades.delete(socket)) })
-    yield* Effect.addFinalizer(() => Effect.sync(() => { node.closeAllConnections(); upgrades.forEach((socket) => socket.destroy()) }))
+    const closeConnections = yield* Effect.cached(Effect.sync(() => {
+      node.closeAllConnections()
+      upgrades.forEach((socket) => socket.destroy())
+      upgrades.clear()
+    }))
+    yield* Effect.addFinalizer(() => closeConnections)
     const imRuntime = HttpApiApp.createIMRuntimeLayer({ buildEngine: options.buildEngine, env: options.env }, options.deviceStore)
     yield* Layer.build(HttpRouter.serve(HttpApiApp.createRoutes({ cors: ["http://127.0.0.1:64675"] }, undefined, { imRuntime }), {
       disableListenLog: true, disableLogger: true,
     }).pipe(Layer.provide(layerWebSocketConstructorGlobal),
       Layer.provideMerge(NodeHttpServer.layer(() => node, { port: options.port, host: "127.0.0.1", gracefulShutdownTimeout: "1 second" })),
       Layer.provideMerge(NodeServices.layer), Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv()))))
+    // Release owned connections before the listener's graceful shutdown starts.
+    yield* Effect.addFinalizer(() => closeConnections)
     const address = node.address()
     if (!address || typeof address === "string") return yield* Effect.die(new Error("Private media listener unavailable"))
     return { url: `http://127.0.0.1:${address.port}`, port: address.port }
