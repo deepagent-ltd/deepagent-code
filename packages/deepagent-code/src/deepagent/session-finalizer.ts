@@ -117,17 +117,19 @@ const literalPathspec = (path: string) => `:(top,literal)${path}`
  * must never make an unrelated file attributable by pattern expansion.
  */
 const attributablePaths = (directory: string, root: string, touchedPaths: readonly string[]) => {
+  // Git for Windows expands 8.3 aliases in its worktree root. Match that path for touched files.
+  const realpath = process.platform === "win32" ? realpathSync.native : realpathSync
   const logicalDirectory = path.resolve(directory)
-  const canonicalDirectory = realpathSync(directory)
+  const canonicalDirectory = realpath(directory)
   return [
     ...new Set(
       touchedPaths.map((item) => {
         if (!path.isAbsolute(item)) return path.resolve(canonicalDirectory, item)
         try {
-          return realpathSync(item)
+          return realpath(item)
         } catch {
           try {
-            return path.join(realpathSync(path.dirname(item)), path.basename(item))
+            return path.join(realpath(path.dirname(item)), path.basename(item))
           } catch {}
         }
         const relative = path.relative(logicalDirectory, item)

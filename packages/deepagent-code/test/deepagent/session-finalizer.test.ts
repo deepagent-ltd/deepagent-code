@@ -15,7 +15,7 @@ import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 const makeRepo = (): string => {
   const dir = mkdtempSync(tmpRootShared())
   const git = (args: string) => execSync(`git ${args}`, { cwd: dir, stdio: "pipe" }).toString()
-  git("init -q -b main 2>/dev/null || git init -q")
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "pipe" })
   git("-c user.name=t -c user.email=t@t commit --no-gpg-sign --allow-empty -m base -q")
   return dir
 }
@@ -32,7 +32,7 @@ describe("session finalizer", () => {
       validation: "validated",
       touchedPaths: ["feature.go"],
     })
-    expect(outcome.kind).toBe("committed")
+    expect(outcome.kind, outcome.kind === "skipped" ? outcome.reason : undefined).toBe("committed")
     if (outcome.kind !== "committed") return
     expect(outcome.files).toBe(1)
     expect(gitAt(dir, "diff --name-only HEAD~1 HEAD").trim()).toBe("feature.go")
