@@ -1,49 +1,93 @@
-import { expect, test, spyOn } from "bun:test"
+import { afterAll, beforeAll, expect, test, spyOn } from "bun:test"
 import { Context } from "effect"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import type { NativeAuthStorage } from "../fixture/mcp-native-auth-storage"
 
+const state: { cohort?: Awaited<ReturnType<typeof import("./fixture/native-auth-cohort").build>> } = {}
 if (!process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
-  test("real OAuth transport ownership runs in an isolated authority process", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "dac-mcp-oauth-scope-"))
-    await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
-    const child = Bun.spawn({
-      cmd: [process.execPath, "test", import.meta.path, "--timeout", "15000"],
-      cwd: path.resolve(import.meta.dir, "../.."),
-      env: {
-        PATH: process.env.PATH,
+  beforeAll(async () => {
+    const { build } = await import("./fixture/native-auth-cohort")
+    state.cohort = await build(import.meta.path)
+  }, 240_000)
+  afterAll(async () => {
+    await state.cohort?.dispose()
+  })
+
+  test(
+    "real OAuth transport ownership runs in an isolated authority process",
+    async () => {
+      const root = await mkdtemp(path.join(state.cohort?.root ?? tmpdir(), "dac-mcp-oauth-scope-"))
+      await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
+      const env = {
+        PATH: process.env.PATH!,
         HOME: path.join(root, "home"),
         TMPDIR: path.join(root, "tmp"),
         XDG_CONFIG_HOME: path.join(root, "config"),
         XDG_DATA_HOME: path.join(root, "data"),
         XDG_CACHE_HOME: path.join(root, "cache"),
         XDG_STATE_HOME: path.join(root, "state"),
+        ...(state.cohort
+          ? {
+              DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+              DEEPAGENT_CODE_HOME: path.join(root, "home", ".deepagent", "code"),
+            }
+          : {}),
+        DEEPAGENT_CODE_DB: ":memory:",
+        DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
+        DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
         DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD: "1",
+        DEEPAGENT_TEST_MCP_OAUTH_SCOPE_NATIVE: state.cohort ? "1" : "",
         DEEPAGENT_CODE_SERVER_PASSWORD: "scope-fixture-secret",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const deadline = setTimeout(() => child.kill(), 90_000)
-    try {
-      const [status, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ])
-      const output = stdout + stderr
-      if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_EVIDENCE)
-        await Bun.write(process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_EVIDENCE, output)
-      expect({ status, output: status === 0 ? "ok" : output }).toEqual({ status: 0, output: "ok" })
-      expect(output).toMatch(/\b0 fail\b/)
-      console.info(output)
-    } finally {
-      clearTimeout(deadline)
-      child.kill()
-      await rm(root, { recursive: true, force: true })
-    }
-  }, 95_000)
+      }
+      const command = state.cohort
+        ? await state.cohort.invocation({ cwd: root, env })
+        : {
+            cmd: [process.execPath, "test", import.meta.path, "--timeout", "15000"],
+            cwd: path.resolve(import.meta.dir, "../.."),
+            env,
+          }
+      const child = Bun.spawn({ ...command, stdout: "pipe", stderr: "pipe" })
+      const terminate = async () => {
+        if (child.exitCode !== null) return
+        if (state.cohort && process.platform === "win32") {
+          const killer = Bun.spawn(
+            [
+              path.win32.join(process.env.SystemRoot!, "System32", "taskkill.exe"),
+              "/PID",
+              String(child.pid),
+              "/T",
+              "/F",
+            ],
+            { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+          )
+          await killer.exited
+        }
+        if (child.exitCode === null) child.kill("SIGKILL")
+        await child.exited
+      }
+      const deadline = setTimeout(() => void terminate(), state.cohort ? 180_000 : 90_000)
+      try {
+        const [status, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ])
+        const output = stdout + stderr
+        if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_EVIDENCE)
+          await Bun.write(process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_EVIDENCE, output)
+        expect({ status, output: status === 0 ? "ok" : output }).toEqual({ status: 0, output: "ok" })
+        expect(output).toMatch(/\b0 fail\b/)
+        console.info(output)
+      } finally {
+        clearTimeout(deadline)
+        await terminate()
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+    process.platform === "win32" ? 195_000 : 95_000,
+  )
 }
 
 if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
@@ -54,15 +98,49 @@ if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
   const { InstanceRef } = await import("../../src/effect/instance-ref")
   const { InstanceRegistry } = await import("../../src/effect/instance-registry")
   const { testEffect } = await import("../lib/effect")
-  const { tmpdirScoped, provideInstance } = await import("../fixture/fixture")
+  const { tmpdirScoped, provideInstance, withTmpdirInstance } = await import("../fixture/fixture")
   const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
   const { McpAuth } = await import("../../src/mcp/auth")
   const { Config } = await import("../../src/config/config")
   const { Global } = await import("@deepagent-code/core/global")
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client")
-  const it = testEffect(
-    Layer.mergeAll(MCP.defaultLayer, CrossSpawnSpawner.defaultLayer, McpAuth.defaultLayer, Config.defaultLayer),
+  const native = process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_NATIVE === "1"
+  const services = Layer.mergeAll(
+    MCP.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+    McpAuth.defaultLayer,
+    Config.defaultLayer,
   )
+  const nativeCases: {
+    name: string
+    run: (storage: import("effect").Layer.Layer<NativeAuthStorage.Services>) => Promise<unknown>
+  }[] = []
+  function register<A, E, R>(
+    name: string,
+    value: () => import("effect").Effect.Effect<A, E, R>,
+    options?: Parameters<typeof withTmpdirInstance>[0],
+  ) {
+    nativeCases.push({
+      name,
+      run: (storage) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const exit = yield* value().pipe(
+              withTmpdirInstance(options),
+              Effect.timeoutOrElse({
+                duration: "15 seconds",
+                orElse: () => Effect.fail(new Error(`Native OAuth scope case timed out: ${name}`)),
+              }),
+              Effect.scoped,
+              Effect.provide(Layer.provideMerge(services, storage)),
+              Effect.exit,
+            )
+            return yield* exit
+          }) as import("effect").Effect.Effect<unknown, unknown, never>,
+        ),
+    })
+  }
+  const it = native ? { instance: register } : testEffect(services)
 
   const fixture = Effect.gen(function* () {
     const tokenRequests: { endpoint: string; code: string | null }[] = []
@@ -698,4 +776,17 @@ if (process.env.DEEPAGENT_TEST_MCP_OAUTH_SCOPE_CHILD) {
       }),
     { config: { mcp: {} } },
   )
+
+  if (native) {
+    const { NativeAuthStorage } = await import("../fixture/mcp-native-auth-storage")
+    await NativeAuthStorage.run(async (storage) => {
+      for (const item of nativeCases) {
+        await item.run(storage)
+        console.log(`(pass) ${item.name}`)
+      }
+      console.log(`\n ${nativeCases.length} pass\n 0 fail`)
+    })
+    const { AppRuntime } = await import("../../src/effect/app-runtime")
+    await AppRuntime.dispose()
+  }
 }

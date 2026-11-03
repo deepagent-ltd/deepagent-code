@@ -1,45 +1,96 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 import { createHash, randomBytes } from "node:crypto"
 
 const fixture = path.resolve(import.meta.dir, "../fixture/mcp-oauth-callback-process.ts")
+const state: {
+  cli?: Awaited<ReturnType<typeof import("./fixture/native-auth-cohort").build>>
+  node?: Awaited<ReturnType<typeof import("../fixture/windows-native-node-cohort").build>>
+} = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { build } = await import("./fixture/native-auth-cohort")
+  state.cli = await build(fixture)
+  const { WindowsNativeNodeCohort } = await import("../fixture/windows-native-node-cohort")
+  state.node = await WindowsNativeNodeCohort.build({
+    directory: await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "dac-mcp-callback-node-")),
+    nodeEntry: fixture,
+  })
+}, 480_000)
+afterAll(async () => {
+  await state.cli?.dispose()
+  await state.node?.dispose()
+})
+
 async function root() {
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-callback-")))
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(state.cli?.root ?? os.tmpdir(), "dac-mcp-callback-")))
   await fs.chmod(directory, 0o700)
   await Promise.all(["home", "tmp", "project"].map((name) => fs.mkdir(path.join(directory, name), { mode: 0o700 })))
   return directory
 }
-function spawn(directory: string, mode: string, name = "one", node?: string) {
-  const child = Bun.spawn(node ? ["node", node, mode, name] : [process.execPath, fixture, mode, name], {
-    cwd: path.resolve(import.meta.dir, "../.."),
-    env: {
-      PATH: process.env.PATH,
-      HOME: path.join(directory, "home"),
-      TMPDIR: path.join(directory, "tmp"),
-      DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
-      DAC_CALLBACK_ROOT: directory,
-      DEEPAGENT_CODE_DB: path.join(directory, "home", ".deepagent", "code", `${name}.sqlite`),
-      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(directory, "managed"),
-      DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+async function spawn(directory: string, mode: string, name = "one", node?: string) {
+  const env = {
+    PATH: process.env.PATH!,
+    HOME: path.join(directory, "home"),
+    TMPDIR: path.join(directory, "tmp"),
+    DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
+    DEEPAGENT_CODE_HOME: path.join(directory, "home", ".deepagent", "code"),
+    DAC_CALLBACK_ROOT: directory,
+    DEEPAGENT_CODE_DB: path.join(directory, "home", ".deepagent", "code", `${name}.sqlite`),
+    DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(directory, "managed"),
+    DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
+    ...(state.cli ? { DAC_MCP_NATIVE_AUTH: node ? "node" : "cli" } : {}),
+  }
+  const child =
+    node && state.node
+      ? state.node.spawn(directory, `${mode}:${name}`, { cwd: path.join(directory, "project"), env })
+      : state.cli && !node
+        ? Bun.spawn({
+            ...(await state.cli.invocation({ args: [mode, name], cwd: path.join(directory, "project"), env })),
+            stdout: "pipe" as const,
+            stderr: "pipe" as const,
+          })
+        : Bun.spawn(node ? ["node", node, mode, name] : [process.execPath, fixture, mode, name], {
+            cwd: path.resolve(import.meta.dir, "../.."),
+            env,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
   const stdout = new Response(child.stdout).text()
   const stderr = new Response(child.stderr).text()
-  const deadline = setTimeout(() => child.kill(), 45000)
+  const deadline = setTimeout(() => void terminate(child), 45000)
   return { child, stdout, stderr, deadline }
 }
-async function collect(directory: string, label: string, process: ReturnType<typeof spawn>) {
-  const code = await process.child.exited
-  clearTimeout(process.deadline)
-  const output = (await process.stdout) + (await process.stderr)
-  await fs.writeFile(path.join(directory, `${label}.log`), output)
-  expect({ code, diagnostic: code === 0 ? null : output }).toEqual({ code: 0, diagnostic: null })
+
+type CallbackProcess = Awaited<ReturnType<typeof spawn>>
+
+async function terminate(child: CallbackProcess["child"]) {
+  if (child.exitCode !== null) return
+  if (state.cli && process.platform === "win32") {
+    const killer = Bun.spawn(
+      [path.win32.join(process.env.SystemRoot!, "System32", "taskkill.exe"), "/PID", String(child.pid), "/T", "/F"],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+    )
+    await killer.exited
+  }
+  if (child.exitCode === null) child.kill("SIGKILL")
+  await child.exited
 }
-async function wait(directory: string, file: string, process: ReturnType<typeof spawn>) {
+
+async function collect(directory: string, label: string, process: CallbackProcess) {
+  try {
+    const code = await process.child.exited
+    const output = (await process.stdout) + (await process.stderr)
+    await fs.writeFile(path.join(directory, `${label}.log`), output)
+    expect({ code, diagnostic: code === 0 ? null : output }).toEqual({ code: 0, diagnostic: null })
+  } finally {
+    clearTimeout(process.deadline)
+    await terminate(process.child)
+  }
+}
+async function wait(directory: string, file: string, process: CallbackProcess) {
   const deadline = Date.now() + 30000
   while (
     !(await fs.stat(path.join(directory, file)).then(
@@ -79,40 +130,44 @@ async function nodeBundle(directory: string) {
 
 test("populated v1 reads stay byte-identical; two processes atomically add v2 without changing secret or operation rows", async () => {
   const directory = await root()
-  await collect(directory, "seed", spawn(directory, "journal-seed"))
-  await collect(directory, "read-v1", spawn(directory, "journal-read"))
+  await collect(directory, "seed", await spawn(directory, "journal-seed"))
+  await collect(directory, "read-v1", await spawn(directory, "journal-read"))
   await Promise.all([
-    collect(directory, "upgrade-a", spawn(directory, "journal-upgrade", "a")),
-    collect(directory, "upgrade-b", spawn(directory, "journal-upgrade", "b")),
+    collect(directory, "upgrade-a", await spawn(directory, "journal-upgrade", "a")),
+    collect(directory, "upgrade-b", await spawn(directory, "journal-upgrade", "b")),
   ])
-  await collect(directory, "read-v2", spawn(directory, "journal-read"))
+  await collect(directory, "read-v2", await spawn(directory, "journal-read"))
   console.info("MCP_CALLBACK_V2_UPGRADE_EVIDENCE", directory)
 }, 40000)
 
 test("Node reads populated v1 without migration and explicitly upgrades the same inode", async () => {
   const directory = await root()
-  await collect(directory, "seed", spawn(directory, "journal-seed"))
-  const node = await nodeBundle(directory)
-  await collect(directory, "node-read-v1", spawn(directory, "journal-read", "one", node))
-  await collect(directory, "node-upgrade", spawn(directory, "journal-upgrade", "one", node))
-  await collect(directory, "node-read-v2", spawn(directory, "journal-read", "one", node))
+  await collect(directory, "seed", await spawn(directory, "journal-seed"))
+  const node = process.platform === "win32" ? "native" : await nodeBundle(directory)
+  await collect(directory, "node-read-v1", await spawn(directory, "journal-read", "one", node))
+  await collect(directory, "node-upgrade", await spawn(directory, "journal-upgrade", "one", node))
+  await collect(directory, "node-read-v2", await spawn(directory, "journal-read", "one", node))
   console.info("MCP_CALLBACK_NODE_UPGRADE_EVIDENCE", directory)
 }, 30000)
 
 test("v2 upgrade rejects partial schemas, malformed retained credentials and extension capacity atomically", async () => {
   for (const name of ["partial", "extra", "shape", "capacity"]) {
     const directory = await root()
-    await collect(directory, "seed", spawn(directory, "journal-seed"))
-    await collect(directory, name, spawn(directory, name === "capacity" ? "journal-capacity" : "journal-invalid", name))
+    await collect(directory, "seed", await spawn(directory, "journal-seed"))
+    await collect(
+      directory,
+      name,
+      await spawn(directory, name === "capacity" ? "journal-capacity" : "journal-invalid", name),
+    )
     console.info("MCP_CALLBACK_UPGRADE_NEGATIVE_EVIDENCE", name, directory)
   }
 }, 30000)
 
 test("a native SQLite COMMIT return fault stays unknown and observes committed v2 without repeating migration", async () => {
   const directory = await root()
-  await collect(directory, "seed", spawn(directory, "journal-seed"))
-  const node = await nodeBundle(directory)
-  await collect(directory, "commit-loss", spawn(directory, "journal-commit-loss", "one", node))
+  await collect(directory, "seed", await spawn(directory, "journal-seed"))
+  const node = process.platform === "win32" ? "native" : await nodeBundle(directory)
+  await collect(directory, "commit-loss", await spawn(directory, "journal-commit-loss", "one", node))
   console.info("MCP_CALLBACK_UPGRADE_COMMIT_EVIDENCE", directory)
 }, 30000)
 
@@ -242,9 +297,9 @@ for (const mode of ["two-processes", "two-roots", "manual", "node", "reuse", "st
         },
       }),
     )
-    const node = mode === "node" ? await nodeBundle(directory) : undefined
+    const node = mode === "node" ? (process.platform === "win32" ? "native" : await nodeBundle(directory)) : undefined
 
-    const first = spawn(
+    const first = await spawn(
       directory,
       mode === "two-roots" || mode === "static" ? "two-roots" : mode === "reuse" ? "reuse" : "auth",
       "a",
@@ -256,7 +311,7 @@ for (const mode of ["two-processes", "two-roots", "manual", "node", "reuse", "st
       const second =
         mode === "two-roots" || mode === "static"
           ? first
-          : spawn(directory, mode === "reuse" ? "reuse" : "auth", "b", node)
+          : await spawn(directory, mode === "reuse" ? "reuse" : "auth", "b", node)
       if (second !== first) children.push(second)
       const b = await wait(directory, "b.ready.json", second)
       if (mode !== "manual" && mode !== "static") expect(a.redirectUri).not.toBe(b.redirectUri)
@@ -288,8 +343,7 @@ for (const mode of ["two-processes", "two-roots", "manual", "node", "reuse", "st
     } finally {
       for (const child of children) {
         clearTimeout(child.deadline)
-        if (child.child.exitCode === null) child.child.kill()
-        await child.child.exited
+        await terminate(child.child)
       }
       await listener.stop(true)
     }
@@ -336,7 +390,7 @@ test("actual DCR dispatch survives SIGKILL; a cold explicit start cannot re-regi
       mcp: { probe: { type: "remote", url: `${listener.url.origin}/mcp`, oauth: {}, timeout: 20000 } },
     }),
   )
-  const first = spawn(directory, "auth", "a")
+  const first = await spawn(directory, "auth", "a")
   const guard = setTimeout(() => received.reject(new Error("DCR dispatch barrier timed out")), 25000)
   try {
     await Promise.race([
@@ -348,12 +402,11 @@ test("actual DCR dispatch survives SIGKILL; a cold explicit start cannot re-regi
     clearTimeout(guard)
     const file = path.join(directory, "home", ".deepagent", "code", "mcp-oauth", "journal.sqlite")
     const identity = await fs.stat(file)
-    first.child.kill("SIGKILL")
-    await first.child.exited
+    await terminate(first.child)
     clearTimeout(first.deadline)
     await fs.writeFile(path.join(directory, "killed.log"), (await first.stdout) + (await first.stderr))
     const before = calls.length
-    const second = spawn(directory, "cold-read", "a")
+    const second = await spawn(directory, "cold-read", "a")
     await collect(directory, "cold-read", second)
     const result = JSON.parse(await fs.readFile(path.join(directory, "a.result.json"), "utf8"))
     expect(result.operations).toEqual([{ kind: "registration", phase: "dispatched", n: 1 }])
@@ -371,8 +424,7 @@ test("actual DCR dispatch survives SIGKILL; a cold explicit start cannot re-regi
   } finally {
     clearTimeout(guard)
     clearTimeout(first.deadline)
-    if (first.child.exitCode === null) first.child.kill()
-    await first.child.exited
+    await terminate(first.child)
     hold.resolve(new Response(null, { status: 503 }))
     await listener.stop(true)
   }

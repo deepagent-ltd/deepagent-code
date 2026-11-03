@@ -90,14 +90,15 @@ export async function build(input: {
     root,
     main: path.join(root, "main", "main.js"),
     module: path.join(root, "main", "chunks", "node.js"),
-    spawn(directory: string, mode = "probe") {
+    spawn(directory: string, mode = "probe", options: { cwd?: string; env?: Record<string, string | undefined> } = {}) {
       return Bun.spawn([runtime, path.join(root, "main", "main.js"), mode], {
-        cwd: root,
+        cwd: options.cwd ?? root,
         env: {
           ...environment(root, toolchain.rustupHome),
           DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
           DEEPAGENT_CODE_HOME: path.join(directory, "private"),
           DAC_MCP_JOURNAL_ROOT: directory,
+          ...options.env,
         },
         stdin: "ignore",
         stdout: "pipe",
@@ -124,7 +125,7 @@ export async function build(input: {
 }
 
 const cached: { value?: ReturnType<typeof build> } = {}
-export function acquire(input: { directory: string; nodeEntry: string }) {
+export function acquire(input: Parameters<typeof build>[0]) {
   cached.value ??= build(input)
   return cached.value
 }
