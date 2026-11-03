@@ -19,4 +19,4 @@ const exit = await Effect.runPromiseExit(Effect.gen(function* () {
 }))
 process.stdout.write(JSON.stringify(Exit.isFailure(exit)
   ? { ok: false, error: Cause.squash(exit.cause) } : { ok: true, result: exit.value }) + "\n",
-  () => process.exit(Exit.isFailure(exit) ? 2 : 0))
+  () => setImmediate(() => process.exit(Exit.isFailure(exit) ? 2 : 0)))

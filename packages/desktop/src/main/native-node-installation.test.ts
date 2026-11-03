@@ -34,7 +34,7 @@ test(process.platform === "win32"
   }
   try {
     const probe = path.join(root, "probe.mjs")
-    await fs.writeFile(probe, "process.stdout.write(JSON.stringify({ runtime: process.execPath, electron: process.versions.electron }) + '\\n', () => process.exit(0))\n")
+    await fs.writeFile(probe, "process.stdout.write(JSON.stringify({ runtime: process.execPath, electron: process.versions.electron }) + '\\n', () => setImmediate(() => process.exit(0)))\n")
     const first = await run(probe)
     expect(first.code).toBe(0)
     const runtime = JSON.parse(first.stdout) as { runtime: string; electron: string }

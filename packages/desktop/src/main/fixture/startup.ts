@@ -62,7 +62,7 @@ const fiber = Effect.runFork(Effect.gen(function* () {
   clearTimeout(deadline)
   writeFileSync(join(root, "safe.json"), JSON.stringify(facts), { mode: 0o600 })
   trace("safe:exit0")
-  app.exit(0)
+  app.quit()
 }).pipe(Effect.onExit((exit) => {
   if (Exit.isFailure(exit)) {
     trace("fiber:failed")
