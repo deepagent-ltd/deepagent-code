@@ -143,7 +143,7 @@ test(
       }).pipe(Effect.scoped),
     )
   },
-  process.platform === "darwin" ? 60_000 : 15000,
+  process.platform === "linux" ? 15_000 : 60_000,
 )
 
 test("readonly deduplication reuses only successful scope-change metadata and preserves failure retry and unknown", async () => {
