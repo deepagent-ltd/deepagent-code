@@ -23,7 +23,8 @@ const state: {
   listener?: Awaited<ReturnType<typeof Server.listen>>
   unknown?: { itemID: string; childID: SessionSchema.ID; token: number }
 } = {}
-const seed = await AppRuntime.runPromise(
+await TaskTuiPrivate.installTuiBridge()
+const seed = AppRuntime.runPromise(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const sessions = yield* SessionV2.Service
@@ -78,17 +79,18 @@ parentPort.on("message", (value: unknown) => {
   void (async () => {
     if (value.probe === "seed") return seed
     if (value.probe === "unknown-seed") {
+      const seedValue = await seed
       state.unknown = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const db = (yield* Database.Service).db
           const submitted = yield* TaskRunAuthority.submit(db, yield* EventV2Bridge.Service, yield* SessionV2.Service, {
-            parentSessionID: seed.parent.id,
+            parentSessionID: seedValue.parent.id,
             parentMessageID: SessionMessage.ID.make("msg_task_tui_unknown"),
             toolCallID: "call_task_tui_unknown",
             prompt: new Prompt({ text: "Unresolved child ownership" }),
             deliveryMode: "foreground",
             agent: "general",
-            child: { title: "Unresolved child", location: seed.parent.location, permissions: [] },
+            child: { title: "Unresolved child", location: seedValue.parent.location, permissions: [] },
           })
           yield* db
             .update(TaskRunTable)
@@ -133,4 +135,3 @@ parentPort.on("message", (value: unknown) => {
     (error: unknown) => parentPort!.postMessage({ probeResult: true, id, error: String(error) }),
   )
 })
-await TaskTuiPrivate.installTuiBridge()
