@@ -569,7 +569,7 @@ describe("Task/Goal attention original-source read model", () => {
         expect(inventory.items).toHaveLength(2)
         yield* Effect.promise(() =>
           Bun.write(
-            "/tmp/dac-attention-work-source-scan.json",
+            path.join(dir, "attention-work-source-scan.json"),
             JSON.stringify({
               sources: inventory.scanned,
               batches: inventory.batches,
@@ -593,5 +593,6 @@ describe("Task/Goal attention original-source read model", () => {
         expect(yield* census(db)).toEqual(before)
       }).pipe(Effect.provide(services(path.join(dir, "batch-sources.db"))))
     }),
+    process.platform === "win32" ? 90_000 : undefined,
   )
 })

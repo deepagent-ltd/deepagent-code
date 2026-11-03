@@ -9,7 +9,7 @@ await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name)
 console.error(JSON.stringify({ test: "task-unknown-custody-process", phase: "child-spawn",
   elapsedMs: Math.round(performance.now() - started) }))
 const child = Bun.spawn({
-  cmd: [process.execPath, "test", "test/task-run-dispatcher.test.ts", "--test-name-pattern", "timed-out real mutation", "--timeout", "10000"],
+  cmd: [process.execPath, "test", "test/task-run-dispatcher.test.ts", "--test-name-pattern", "timed-out real mutation", "--timeout", process.platform === "win32" ? "60000" : "10000"],
   cwd: path.resolve(import.meta.dirname, "../.."),
   env: { PATH: process.env.PATH, HOME: path.join(root, "home"), TMPDIR: path.join(root, "tmp"),
     XDG_CONFIG_HOME: path.join(root, "config"), XDG_DATA_HOME: path.join(root, "data"),

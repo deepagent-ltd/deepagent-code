@@ -627,6 +627,7 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       expect(yield* Effect.promise(() => Bun.file(filename).text())).toBe("original effect\n")
       trace("assertions-complete")
     }),
+    process.platform === "win32" ? 90_000 : undefined,
   )
   it.effect("a canonical background wait returns after its launch activity settles, exactly once", () =>
     Effect.gen(function* () {
