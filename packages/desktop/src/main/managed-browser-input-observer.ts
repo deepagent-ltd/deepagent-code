@@ -16,7 +16,7 @@ export type ManagedBrowserInputAsset = Readonly<{
   sourceSha256: string
 }>
 
-type NativeLease = { healthy(): boolean; originalClientsDetached(): boolean; release(): void }
+type NativeLease = { healthy(): boolean; pendingClientReplacement(): boolean; release(): void }
 type NativeObserver = { version: 1; observe(handle: Buffer, invalidate: () => void): NativeLease }
 
 /** Main-only: asset is a publisher manifest selected by the fixed product build. */
@@ -36,7 +36,7 @@ export function observeManagedBrowserInput(input: {
       Object.getOwnPropertyNames(binding).toSorted().join(",") !== "observe,version")
       return { status: "unavailable", reason: "invalid_module" } as const
     const native = (binding as NativeObserver).observe(input.window.getNativeWindowHandle(), () => input.invalidate())
-    if (typeof native.originalClientsDetached !== "function" || !native.healthy()) {
+    if (typeof native.pendingClientReplacement !== "function" || !native.healthy()) {
       native.release()
       return { status: "unavailable", reason: "observer_unhealthy" } as const
     }
@@ -54,7 +54,7 @@ export function observeManagedBrowserInput(input: {
     return Object.freeze({
       status: "available" as const,
       healthy: () => !state.released && !input.window.isDestroyed() && native.healthy(),
-      originalClientsDetached: () => !input.window.isDestroyed() && native.originalClientsDetached(),
+      pendingClientReplacement: () => !input.window.isDestroyed() && native.pendingClientReplacement(),
       release,
     })
   } catch (error) {

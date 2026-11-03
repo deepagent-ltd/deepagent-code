@@ -778,7 +778,7 @@ function createManager(port: MessagePortMain, inputAsset: ManagedBrowserInputAss
         dispatched = true
         const created = await createTab(entry)
         await entry.network?.beginAction(action)
-        if (command.url) await loadTabURL(created, command.url, action.deadline)
+        if (command.url) await created.contents.loadURL(command.url)
         await permit(entry, action)
         if (command.url) renewInputSource(created)
         return { result: { tabs: tabs(entry) } }
@@ -1655,18 +1655,23 @@ function destroyTab(tab: ManagedTab): Promise<boolean> {
 }
 async function loadTabURL(tab: ManagedTab, url: string, deadline: number) {
   const contents = tab.contents
-  const prior = contents.getURL() === "about:blank" && tab.inputSource?.status === "available" ? tab.inputSource : undefined
+  const source = tab.inputSource
+  const prior = source?.status === "available" && source.healthy() ? source : undefined
+  const frameToken = prior ? contents.mainFrame.frameToken : undefined
   await contents.loadURL(url)
-  if (!prior || prior.healthy()) return
+  if (!prior) return
+  if (contents.isDestroyed() || deadline <= Date.now()) fail("BROWSER_CANCELLED")
+  if (contents.mainFrame.frameToken === frameToken || !prior.pendingClientReplacement()) return
 
-  // Chromium can report load and renderer deletion before AppKit detaches the
-  // blank document's Cocoa clients. Only the original view identities can
-  // establish that the handoff is complete before the new source is bound.
+  // A load can finish while AppKit still has both the original and replacement
+  // client. Chromium gives unload up to 500 ms; allow an extra interval for
+  // AppKit and then let the existing observer check the entire current tree.
+  const observeUntil = Math.min(deadline, Date.now() + 1_000)
   while (true) {
-    const remaining = deadline - Date.now()
-    if (remaining <= 0 || contents.isDestroyed()) fail("BROWSER_CANCELLED")
-    if (prior.originalClientsDetached()) return
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(16, remaining)))
+    const now = Date.now()
+    if (now >= deadline || contents.isDestroyed()) fail("BROWSER_CANCELLED")
+    if (now >= observeUntil || !prior.pendingClientReplacement()) return
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(16, observeUntil - now)))
   }
 }
 function navigateTab(contents: WebContents, dispatch: () => void, deadline: number): Promise<void> {

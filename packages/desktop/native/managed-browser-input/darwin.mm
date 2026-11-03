@@ -29,6 +29,7 @@ struct Watch : std::enable_shared_from_this<Watch> {
   id closing = nil;
   bool invalid = false;
   bool closed = false;
+  bool sawClientOverlap = false;
   std::atomic<bool> diagnosed{false};
 };
 struct Owner {
@@ -222,6 +223,17 @@ static void lifecycleObserved(const std::shared_ptr<Watch>& watch, NSView *view,
     window && view.window == window ? "true" : "false", window && root && window.contentView == root ? "true" : "false",
     collected ? "true" : "false", watch->clients.size(), collected ? (long)clients.count : -1L, same ? "true" : "false");
 }
+static bool overlappingClient(const std::shared_ptr<Watch>& watch) {
+  NSWindow *window = watch->window;
+  NSView *root = watch->root;
+  if (!window || !root || window.contentView != root || watch->clients.size() != 1 ||
+      [NSApp.windows indexOfObjectIdenticalTo:window] == NSNotFound) return false;
+  NSView *original = watch->clients.front().view;
+  if (!original || original.window != window) return false;
+  NSMutableArray<NSView *> *clients = [NSMutableArray new]; unsigned nodes = 0;
+  return collectClients(root, watch->hooks, clients, 0, nodes) && clients.count == 2 &&
+    [clients indexOfObjectIdenticalTo:original] != NSNotFound && clients[0].window == window && clients[1].window == window;
+}
 static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
   if (!NSThread.isMainThread) { hooks->tainted.store(true); return; }
   const auto users = hooks->users;
@@ -232,6 +244,7 @@ static void platformSource(NSView *view, HookSlot *hooks, bool lifecycle) {
     if (!known && view.window != watch->window) continue;
     if (lifecycle) lifecycleObserved(watch, view, known);
     if (lifecycle || !known || !currentWindow(watch)) {
+      if (lifecycle && !known) watch->sawClientOverlap = overlappingClient(watch);
       if (lifecycle || !known) sourceRejected(watch, lifecycle ? "client_view_moved" : "client_unobserved");
       watch->invalid = true; signalWatch(watch, "client_retirement"); releaseWatch(watch); continue;
     }
@@ -303,17 +316,11 @@ static napi_value healthy(napi_env env, napi_callback_info info) {
   if (watch && !value && NSThread.isMainThread) releaseWatch(watch);
   napi_value result; napi_get_boolean(env, value, &result); return result;
 }
-static napi_value originalClientsDetached(napi_env env, napi_callback_info info) {
+static napi_value pendingClientReplacement(napi_env env, napi_callback_info info) {
   auto watch = receiver(env, info);
-  NSWindow *window = watch && NSThread.isMainThread ? watch->window : nil;
-  NSView *root = window ? watch->root : nil;
   // A closed lease retains only weak identities. This query never restores it.
-  const bool detached = window && root && window.contentView == root &&
-    [NSApp.windows indexOfObjectIdenticalTo:window] != NSNotFound &&
-    std::none_of(watch->clients.begin(), watch->clients.end(), [window](const auto& client) {
-      return client.view.window == window;
-    });
-  napi_value result; napi_get_boolean(env, detached, &result); return result;
+  const bool pending = NSThread.isMainThread && watch && watch->sawClientOverlap && overlappingClient(watch);
+  napi_value result; napi_get_boolean(env, pending, &result); return result;
 }
 static napi_value release(napi_env env, napi_callback_info info) {
   if (!NSThread.isMainThread) { napi_throw_error(env, nullptr, "MANAGED_BROWSER_INPUT_THREAD"); return nullptr; }
@@ -381,7 +388,7 @@ static napi_value observe(napi_env env, napi_callback_info info) {
   }
   napi_property_descriptor properties[] = {
     {"healthy", nullptr, healthy, nullptr, nullptr, nullptr, napi_default, nullptr},
-    {"originalClientsDetached", nullptr, originalClientsDetached, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"pendingClientReplacement", nullptr, pendingClientReplacement, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"release", nullptr, release, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, lease, 3, properties); napi_object_freeze(env, lease);
