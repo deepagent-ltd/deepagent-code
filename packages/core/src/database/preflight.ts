@@ -623,7 +623,15 @@ export const withReadOnlyPreflight = async <A,>(
     ),
   )
   if (Result.isFailure(obtained)) {
-    observeOwnedPreflight(options, "lease-refused", observations, obtained.failure instanceof DatabaseMigrationLease.LeaseTimeout)
+    const leaseTimeout = obtained.failure instanceof DatabaseMigrationLease.LeaseTimeout
+    // A runtime owner can acquire the fence after the initial read-only observation.
+    // Recheck ownership before treating the deferred inspection as an open failure.
+    if (leaseTimeout && await defaultProbes.activeProcess(options.filename)) {
+      const current = { ...observations, activeProcess: true, dbInspectionDeferred: "active_owner" as const }
+      observeOwnedPreflight(options, "active-owner", current, leaseTimeout)
+      return unavailable(analyzePreflight(options, current))
+    }
+    observeOwnedPreflight(options, "lease-refused", observations, leaseTimeout)
     return unavailable(original)
   }
   const lock = obtained.success

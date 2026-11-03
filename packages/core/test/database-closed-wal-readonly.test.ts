@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, spyOn, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Database } from "bun:sqlite"
@@ -148,6 +148,35 @@ test("closed runtime lock contention keeps current owner and refuses immutable f
     expect(await exists(filename + "-shm")).toBe(false)
   } finally {
     await Effect.runPromise(lock.release)
+  }
+})
+
+test("an owner arriving after the initial probe still fences closed WAL inspection", async () => {
+  const filename = await fixture("late-owner")
+  const active = DatabaseMigrationLease.processLockActive
+  let owner: Effect.Success<ReturnType<typeof DatabaseMigrationLease.acquireProcessLock>> | undefined
+  // Schedule a real lease between the first owner observation and the fence acquisition.
+  const probe = spyOn(DatabaseMigrationLease, "processLockActive").mockImplementationOnce(async (lockDir, opts) => {
+    const observed = await active(lockDir, opts)
+    expect(observed).toBe(false)
+    owner = await Effect.runPromise(DatabaseMigrationLease.acquireProcessLock(lockDir))
+    return observed
+  })
+  try {
+    const result = await DatabasePreflight.withReadOnlyPreflight(
+      options(filename),
+      () => { throw new Error("A competing owner must fence inspection") },
+      (result) => result,
+    )
+    if (result.ok) throw new Error("refusal required")
+    expect(result.issues.map((issue) => issue.code)).toEqual(["another_process_active"])
+    expect(result.observations.dbInspectionDeferred).toBe("active_owner")
+    expect(await exists(filename + "-wal")).toBe(false)
+    expect(await exists(filename + "-shm")).toBe(false)
+    expect(await active(filename + ".runtime.lock")).toBe(true)
+  } finally {
+    probe.mockRestore()
+    if (owner) await Effect.runPromise(owner.release)
   }
 })
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import path from "node:path"
@@ -335,13 +335,12 @@ describe("AgentGateway", () => {
     }
   })
 
-  test("global runtime manages upstream providers under high/max", async () => {
-    // V3.1 global runtime: DeepAgent is provider-agnostic. A high/max turn on any upstream
-    // provider (here openai) is managed and writes run artifacts, and the DeepAgent system
-    // prompt is injected regardless of providerID. (Pre-V3.1 this provider was passthrough.)
-    const root = await tempRunsDir()
-    const runsDir = path.join(root, "runs")
-    try {
+  describe("upstream provider runtime", () => {
+    let root: string | undefined
+
+    beforeAll(async () => {
+      root = await tempRunsDir()
+      const runsDir = path.join(root, "runs")
       await mkdir(runsDir, { recursive: true })
       AgentGateway.configure({
         enabled: true,
@@ -350,7 +349,17 @@ describe("AgentGateway", () => {
         runsDir,
         allowProviderExecutedTools: false,
       })
+      // The separate startup test covers cold seeding. This case exercises the managed turn.
+      await AgentGateway.flushKnowledgeSeed()
+    }, 60_000)
 
+    afterAll(async () => {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      if (root) await rm(root, { recursive: true, force: true })
+    })
+
+    test("global runtime manages upstream providers under high/max", async () => {
+      if (!root) throw new Error("Upstream provider fixture is unavailable")
       const events = await Effect.runPromise(
         AgentGateway.manageStream(
           defaultProviderRunInput,
@@ -359,17 +368,14 @@ describe("AgentGateway", () => {
       )
 
       expect(Array.from(events).map((event) => event.type)).toEqual(["text-delta", "finish"])
-      expect(await readdir(runsDir)).toHaveLength(1)
+      expect(await readdir(path.join(root, "runs"))).toHaveLength(1)
       expect(AgentGateway.systemPrompt("openai").join("\n").length).toBeGreaterThan(0)
       // FEAT-007: the run entry locks the active pack snapshot id onto the session state so the
       // session prompt loop can attribute each tool-request receipt (no registry configured here →
       // the deterministic `pack_snapshot:empty` sentinel, still a valid `pack_snapshot:%` value).
       expect(AgentGateway.DeepAgentSessionState.get("ses_test")?.packSnapshotId).toMatch(/^pack_snapshot:/)
-    } finally {
-      AgentGateway.configure({ enabled: false, runsDir: undefined })
-      await rm(root, { recursive: true, force: true })
-    }
-  }, 15_000)
+    }, 15_000)
+  })
 
   test("flag-gated durable learning finalization admits one immutable background job", async () => {
     const root = await tempRunsDir()

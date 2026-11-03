@@ -132,7 +132,8 @@ jobs:
 
   unit:
     name: unit (${{ matrix.settings.name }}, ${{ matrix.suite }}, ${{ matrix.shard }})
-    timeout-minutes: ${{ matrix.settings.timeout }}
+    # Windows setup and report collection need time outside the 60-minute unit step.
+    timeout-minutes: ${{ matrix.settings.name == 'windows' && 75 || matrix.settings.timeout }}
     strategy:
       fail-fast: false
       matrix:

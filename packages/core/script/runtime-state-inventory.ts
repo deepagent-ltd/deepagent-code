@@ -4622,6 +4622,15 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "config-hot-refresh",
     verdict: "safe_scoped",
   },
+  "packages/deepagent-code/src/config/config.ts:closure@1247:1284.missing": {
+    owner: "Config.watch-invocation",
+    keyScope: "previously-watched-target-directory",
+    bound: "configured-target-directory-count",
+    finalizer: "reattach-unwatches-or-watch-stop-unwatches-and-clears",
+    durability: "fs-watchFile-listeners-only",
+    reachability: "config-hot-refresh",
+    verdict: "safe_scoped",
+  },
   "packages/deepagent-code/src/mcp/index.ts:pendingOAuthTransports": {
     owner: "MCP.InstanceState",
     keyScope: "mcp-config-key",

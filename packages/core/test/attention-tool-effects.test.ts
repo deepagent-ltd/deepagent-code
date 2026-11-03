@@ -26,6 +26,9 @@ test.each([false, true])(
     await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
     const filename = path.join(root, "authority.sqlite")
     try {
+      // This test covers recovery discovery. Prepare the empty schema before the
+      // subprocess starts its timed dispatch against the real on-disk database.
+      await Database.Service.pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped, Effect.runPromise)
       const child = Bun.spawn({
         cmd: [
           process.execPath,
