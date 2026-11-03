@@ -608,6 +608,8 @@ export const withReadOnlyPreflight = async <A,>(
   const before = await closedFileStamp(options.filename).catch(() => undefined)
   if (!before) {
     observeOwnedPreflight(options, "stamp-refused", observations)
+    if (observations.activeProcess)
+      return unavailable(analyzePreflight(options, { ...observations, dbInspectionDeferred: "active_owner" }))
     return unavailable(original)
   }
   if (observations.activeProcess) {

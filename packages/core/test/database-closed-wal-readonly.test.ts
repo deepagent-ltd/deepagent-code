@@ -180,6 +180,37 @@ test("an owner arriving after the initial probe still fences closed WAL inspecti
   }
 })
 
+test("an active owner with WAL arriving before the closed-file stamp stays owner-deferred", async () => {
+  const filename = await fixture("late-wal")
+  const lock = await Effect.runPromise(DatabaseMigrationLease.acquireProcessLock(filename + ".runtime.lock"))
+  const active = DatabaseMigrationLease.processLockActive
+  let writer: Database | undefined
+  const probe = spyOn(DatabaseMigrationLease, "processLockActive").mockImplementationOnce(async (lockDir, opts) => {
+    const observed = await active(lockDir, opts)
+    expect(observed).toBe(true)
+    writer = new Database(filename)
+    writer.run("INSERT INTO migration VALUES('m2',2)")
+    expect(await exists(filename + "-wal")).toBe(true)
+    return observed
+  })
+  try {
+    const result = await DatabasePreflight.withReadOnlyPreflight(
+      options(filename),
+      () => { throw new Error("A competing owner must fence inspection") },
+      (result) => result,
+    )
+    if (result.ok) throw new Error("refusal required")
+    expect(result.issues.map((issue) => issue.code)).toEqual(["another_process_active"])
+    expect(result.observations.dbInspectionDeferred).toBe("active_owner")
+    expect(await exists(filename + "-wal")).toBe(true)
+    expect(await active(filename + ".runtime.lock")).toBe(true)
+  } finally {
+    probe.mockRestore()
+    writer?.close()
+    await Effect.runPromise(lock.release)
+  }
+})
+
 test("closed WAL with a second hard link refuses inspection without creating sidecars or acquiring a lease", async () => {
   const filename = await fixture("hardlinked")
   await fs.link(filename, filename + ".alias")
