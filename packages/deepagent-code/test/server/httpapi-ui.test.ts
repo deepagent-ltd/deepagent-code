@@ -17,9 +17,11 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { ServerAuth } from "../../src/server/auth"
 import { authorizationRouterMiddleware } from "../../src/server/routes/instance/httpapi/middleware/authorization"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { serveEmbeddedUIEffect, serveUIEffect } from "../../src/server/shared/ui"
 import { testEffect } from "../lib/effect"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
 
 void Log.init({ print: false })
 

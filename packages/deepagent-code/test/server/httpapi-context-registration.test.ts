@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { HttpRouter } from "effect/unstable/http"
-import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
 import { tmpdir } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("@/server/routes/instance/httpapi/server")
 
 // The complete production route factory owns construction and request services. Do not
 // inject a Gateway or a synthetic authorization/context middleware into the request.

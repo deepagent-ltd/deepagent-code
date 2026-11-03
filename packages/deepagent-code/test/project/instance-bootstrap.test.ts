@@ -4,14 +4,26 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
-import { bootstrap as cliBootstrap } from "../../src/cli/bootstrap"
-import { InstanceLayer } from "../../src/project/instance-layer"
-import { InstanceStore } from "../../src/project/instance-store"
-import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
-import { waitGlobalBusEvent } from "../server/global-bus"
-import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { Global } from "@deepagent-code/core/global"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const [
+  { InstanceLayer },
+  { InstanceStore },
+  { disposeAllInstances, tmpdirScoped },
+  { testEffect },
+  { waitGlobalBusEvent },
+  { registerDisposer, registerInitializer },
+  { bootstrap },
+] = await Promise.all([
+  import("../../src/project/instance-layer"),
+  import("../../src/project/instance-store"),
+  import("../fixture/fixture"),
+  import("../lib/effect"),
+  import("../server/global-bus"),
+  import("@/effect/instance-registry"),
+  import("../../src/cli/bootstrap"),
+])
 
 const it = testEffect(Layer.mergeAll(InstanceLayer.layer, CrossSpawnSpawner.defaultLayer))
 
@@ -94,7 +106,7 @@ it.live(
     Effect.gen(function* () {
       const tmp = yield* bootstrapFixture
 
-      yield* Effect.promise(() => cliBootstrap(tmp.directory, async () => "ok"))
+      yield* Effect.promise(() => bootstrap(tmp.directory, async () => "ok"))
 
       expect(existsSync(tmp.marker)).toBe(true)
     }),
@@ -107,7 +119,7 @@ it.live("CLI bootstrap disposes the instance when the callback rejects", () =>
     const disposed = yield* waitDisposed(tmp.directory).pipe(Effect.forkScoped({ startImmediately: true }))
 
     const exit = yield* Effect.promise(() =>
-      cliBootstrap(tmp.directory, async () => Promise.reject(new Error("boom"))),
+      bootstrap(tmp.directory, async () => Promise.reject(new Error("boom"))),
     ).pipe(Effect.exit)
 
     expect(Exit.isFailure(exit)).toBe(true)
