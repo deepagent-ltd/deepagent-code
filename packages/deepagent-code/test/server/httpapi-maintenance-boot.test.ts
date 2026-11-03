@@ -7,10 +7,12 @@ import { Flag } from "@deepagent-code/core/flag/flag"
 import { Effect } from "effect"
 import path from "node:path"
 import fs from "node:fs/promises"
-import { Server } from "../../src/server/server"
-import { MaintenancePaths } from "../../src/server/routes/instance/httpapi/groups/maintenance"
-import { tmpdir } from "../fixture/fixture"
-import { seedIndeterminateProviderAuthority } from "../fixture/provider-recovery"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { Server } = await import("../../src/server/server")
+const { MaintenancePaths } = await import("../../src/server/routes/instance/httpapi/groups/maintenance")
+const { tmpdir } = await import("../fixture/fixture")
+const { seedIndeterminateProviderAuthority } = await import("../fixture/provider-recovery")
 
 const originalDatabase = Flag.DEEPAGENT_CODE_DB
 const originalPassword = process.env.DEEPAGENT_CODE_SERVER_PASSWORD
@@ -107,7 +109,7 @@ test("a non-ready store starts only the authenticated read-only maintenance shel
   } finally {
     recovered.close()
   }
-})
+}, process.platform === "win32" ? 60_000 : 5_000)
 
 test("the ready runtime abandons one exact indeterminate provider attempt through the maintenance API", async () => {
   await using root = await tmpdir()

@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer, Option } from "effect"
+import { Config as EffectConfig, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import { NodeHttpServer } from "@effect/platform-node"
 import { FetchHttpClient, HttpClient, HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/unstable/http"
@@ -780,7 +780,7 @@ export const routes = createRoutes()
 // LocationServiceMap / disposal authority instead of forming a second root.
 // Default is a private per-handler root, which keeps test-built handlers isolated.
 export const webHandler = (memoMap: Layer.MemoMap = makeMemoMap()) =>
-  HttpRouter.toWebHandler(createRoutes(), {
+  HttpRouter.toWebHandler(createRoutes().pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv()))), {
     disableLogger: true,
     memoMap,
     middleware: disposeMiddleware,

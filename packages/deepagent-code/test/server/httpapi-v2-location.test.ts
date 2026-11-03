@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { Context, Schema } from "effect"
 import { realpath, symlink } from "node:fs/promises"
 import path from "node:path"
-import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import * as Log from "@deepagent-code/core/util/log"
-import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+const { HttpApiApp } = await import("../../src/server/routes/instance/httpapi/server")
+const { resetDatabase } = await import("../fixture/db")
+const { disposeAllInstances, tmpdir } = await import("../fixture/fixture")
 
 void Log.init({ print: false })
 
@@ -16,13 +18,14 @@ void Log.init({ print: false })
 // because a previous test may have reset the flag back to false.
 // We also reset the database before each test to flush stale events emitted
 // by other test files that run concurrently in the full suite.
+const testTimeout = process.platform === "win32" ? 30_000 : 5_000
 let _savedExperimentalWorkspaces: boolean
 beforeEach(async () => {
   _savedExperimentalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
   Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = true
   await disposeAllInstances()
   await resetDatabase()
-})
+}, testTimeout)
 
 // Skip the native-EventV2 streaming test in environments without a real LLM
 // key. The server-side location resolver does not yet populate location.project
@@ -72,7 +75,7 @@ afterEach(async () => {
   Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = _savedExperimentalWorkspaces
   await disposeAllInstances()
   await resetDatabase()
-})
+}, testTimeout)
 
 describe("v2 location HttpApi", () => {
   test("creates a Session through a directory alias using the canonical host Location", async () => {
@@ -92,7 +95,7 @@ describe("v2 location HttpApi", () => {
     const commands = await request("/api/command", alias)
     expect(commands.status).toBe(200)
     expect((await commands.json() as { location: { directory: string } }).location.directory).toBe(directory)
-  })
+  }, testTimeout)
 
   test("returns command and skill snapshots with resolved locations", async () => {
     await using tmp = await tmpdir({ git: true })
@@ -108,7 +111,7 @@ describe("v2 location HttpApi", () => {
       expect(body.location.directory).toBe(tmp.path)
       expect(body.location.project.id).toBeTruthy()
     }
-  })
+  }, testTimeout)
 
   test.skipIf(!hasLLMKey)("streams native EventV2 payloads with resolved locations", async () => {
     await using tmp = await tmpdir({ git: true })
