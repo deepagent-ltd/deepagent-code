@@ -36,7 +36,7 @@ const run = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientServic
       // Migrations run on the same FK-on client contract as production bootstrap.
       yield* (yield* SqliteClient.SqliteClient).unsafe("PRAGMA foreign_keys = ON")
       return yield* effect
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped))
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })), Effect.scoped))
 
 const issuance = V2OwnerAuthorization.generateAuthorizationKeyPair()
 const identity = V2ProviderTurn.buildIdentityFromVersion(VERSION)

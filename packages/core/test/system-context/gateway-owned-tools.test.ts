@@ -50,7 +50,9 @@ test("production tool layers keep their exact immutable Gateway stores outside A
               Layer.mergeAll(
                 AgentGateway.runtimeLayer({ enabled: true, agentMode: "general", durableLearning: false, baseDir }),
                 ToolRegistry.defaultLayer,
-                quotaLayer(path.join(baseDir, "test.sqlite")),
+                // The file-backed Gateway stores are the isolation boundary under test; the quota
+                // fixture still runs the real schema without two unrelated file migration chains.
+                quotaLayer(":memory:"),
               ),
             )
             const gateway = Context.get(context, AgentGateway.Runtime)
