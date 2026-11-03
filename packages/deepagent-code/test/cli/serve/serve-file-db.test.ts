@@ -36,7 +36,7 @@ describe("deepagentCode serve with a file database (subprocess)", () => {
         // Suffix match: macOS tmp homes resolve through the /var -> /private/var symlink, so the
         // child's live connection path may differ from the test-side join by that prefix only.
         expect(digestBody).toMatchObject({ database: {} })
-        expect((digestBody as { database: { path: string } }).database.path.endsWith(`/${databaseName}`)).toBe(true)
+        expect(path.basename((digestBody as { database: { path: string } }).database.path)).toBe(databaseName)
       }),
     90_000,
   )

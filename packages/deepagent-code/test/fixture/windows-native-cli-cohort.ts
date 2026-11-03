@@ -204,7 +204,7 @@ export async function build(input: {
       }
       assert.equal(env.RUSTUP_HOME, toolchain.rustupHome)
       if (env.DEEPAGENT_CODE_DB && env.DEEPAGENT_CODE_DB !== ":memory:")
-        await requireOwnedDirectory(root, path.dirname(env.DEEPAGENT_CODE_DB))
+        await requireOwnedDirectory(root, path.dirname(path.resolve(env.DEEPAGENT_CODE_HOME ?? env.DEEPAGENT_CODE_TEST_HOME!, env.DEEPAGENT_CODE_DB)))
       if (input.cwd) await requireOwnedDirectory(root, input.cwd)
       return { cmd: [executable, ...(input.args ?? [])], cwd: input.cwd ?? root,
         env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)) }

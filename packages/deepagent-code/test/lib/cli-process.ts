@@ -24,6 +24,7 @@ import { Deferred, Duration, Effect, Layer, Queue, Scope, Stream } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import path from "node:path"
+import os from "node:os"
 import fs from "node:fs/promises"
 import { TestLLMServer } from "./llm-server"
 import { testProviderConfig } from "./test-provider"
@@ -287,13 +288,27 @@ export function withCliFixture<A, E>(
 ): Effect.Effect<A, E | unknown, Scope.Scope> {
   return Effect.gen(function* () {
     const llm = yield* TestLLMServer
-    const fs = yield* FSUtil.Service
     const appProc = yield* AppProcess.Service
 
-    // FileSystem.makeTempDirectoryScoped handles both creation and scope-tied
-    // cleanup — replaces the old mkdir + addFinalizer pair.
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-",
-      ...(native.cohort ? { directory: native.cohort.root } : {}) })
+    const home = yield* Effect.acquireRelease(
+      Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(native.cohort?.root ?? os.tmpdir(), "oc-cli-")))),
+      // Native directory handles can outlive child exit on Windows; this is the only cleanup owner.
+      (home) => Effect.promise(async () => {
+        if (process.platform === "win32") Bun.gc(true)
+        const remove = async (remaining: number): Promise<void> => {
+          try {
+            await fs.rm(home, { recursive: true, force: true })
+          } catch (error) {
+            if (process.platform !== "win32" || remaining === 0 ||
+              !(typeof error === "object" && error !== null && "code" in error &&
+                ["EBUSY", "EPERM"].includes(String(error.code)))) throw error
+            await Bun.sleep(100)
+            return remove(remaining - 1)
+          }
+        }
+        await remove(100)
+      }),
+    )
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
     // The V2 location config (packages/core/src/config.ts) discovers config from FILES only — it
