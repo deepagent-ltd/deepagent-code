@@ -23,9 +23,14 @@ async function main() {
     const child = electron.utilityProcess.fork(fileURLToPath(new URL("./sidecar.js", import.meta.url)), [process.argv.at(-1)!], {
       env: process.env, stdio: "pipe",
     })
-    const state = { closed: false }
+    const state = { closed: false, completed: false, timedOut: false }
     const closed = new Promise<number>((resolve) => child.once("exit", (code) => { state.closed = true; resolve(code) }))
-    const timer = setTimeout(() => child.kill(), 55_000)
+    child.on("message", (message: unknown) => {
+      if (state.completed || !message || typeof message !== "object" || !("type" in message) || message.type !== "dac-native-fixture-complete-v1") return
+      state.completed = true
+      child.kill()
+    })
+    const timer = setTimeout(() => { state.timedOut = true; child.kill() }, 240_000)
     try {
       const output = { stdout: "", stderr: "" }
       child.stdout?.on("data", (bytes: Buffer) => {
@@ -40,6 +45,7 @@ async function main() {
       await phase("original-parent-receipt-bound")
       const code = await closed
       await fs.writeFile(path.join(root, "runtime-result.json"), JSON.stringify({ code, ...output }))
+      assert.equal(state.completed && !state.timedOut, true, "The original Native child did not complete its fixture")
       assert.equal(code, 0, "The original Native child failed")
       await phase("native-child-exited")
     } finally {

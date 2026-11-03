@@ -8,4 +8,11 @@ assert(port, "The original utilityProcess parent port is required")
 assert.equal(await receiveWindowsNativeSidecar(port), true)
 // Keep the original receipt before the first import of the sealed Node image.
 const entry: { main: () => Promise<void> } = await import(new URL("./chunks/node.js", import.meta.url).href)
-await entry.main()
+await entry.main().catch((error: unknown) => {
+  console.error("NATIVE_CHILD_FAILURE", error)
+  throw error
+})
+const completion = process as NodeJS.Process & {
+  parentPort?: { postMessage(message: { type: "dac-native-fixture-complete-v1" }): void }
+}
+completion.parentPort?.postMessage({ type: "dac-native-fixture-complete-v1" })

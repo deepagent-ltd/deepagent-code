@@ -1,10 +1,28 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
 
 const fixture = path.resolve(import.meta.dir, "../fixture/mcp-auth-journal.ts")
+const state: { cohort?: Awaited<ReturnType<typeof import("../fixture/windows-native-node-cohort").build>> } = {}
+
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const runner = process.env.RUNNER_TEMP
+  if (!runner || path.win32.parse(runner).root.toUpperCase() !== "D:\\")
+    throw new Error("Native journal tests require D: scratch space")
+  await fs.mkdir(runner, { recursive: true })
+  const { build } = await import("../fixture/windows-native-node-cohort")
+  state.cohort = await build({
+    directory: await fs.mkdtemp(path.join(runner, "dac-native-journal-build-")),
+    nodeEntry: fixture,
+  })
+}, 240_000)
+
+afterAll(async () => {
+  await state.cohort?.dispose()
+})
 
 async function root() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-journal-"))
@@ -12,14 +30,17 @@ async function root() {
   return fs.realpath(directory)
 }
 
-function child(directory: string, mode: string, node?: string) {
+function child(directory: string, mode: string, node?: string, native = false) {
+  if (state.cohort && (native || !node)) return state.cohort.spawn(directory, mode)
   return Bun.spawn(node ? ["node", node, mode] : [process.execPath, fixture, mode], {
     cwd: path.resolve(import.meta.dir, "../.."),
     env: {
       PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
       HOME: path.join(directory, "home"),
       TMPDIR: path.join(directory, "tmp"),
       DEEPAGENT_CODE_TEST_HOME: path.join(directory, "home"),
+      ...(process.platform === "win32" ? { DEEPAGENT_CODE_HOME: path.join(directory, "private") } : {}),
       DAC_MCP_JOURNAL_ROOT: directory,
     },
     stdout: "pipe",
@@ -51,14 +72,24 @@ test("private journal primitive checks and rollback use actual Bun and Node adap
   await fs.writeFile(output, await build.outputs[0].text())
   const bundle = await fs.readFile(output, "utf8")
   expect(bundle).not.toMatch(/from\s*["']bun:/)
-  const bun = await collect(directory, "bun-primitive", child(directory, "primitive"))
+  const bun = await collect(
+    directory,
+    "bun-primitive",
+    child(directory, "primitive", undefined, process.platform !== "win32"),
+  )
   const other = await root()
   const node = await collect(other, "node-primitive", child(other, "primitive", output))
-  expect(bun.transactionRollback).toBe(true)
-  expect(node.transactionRollback).toBe(true)
-  expect(bun.blobRejected && node.blobRejected).toBe(true)
+  if (process.platform === "win32") {
+    expect(bun.transactionRollback).toBe(true)
+    expect(bun.blobRejected).toBe(true)
+    expect(node.nativeRequired).toBe(true)
+  } else {
+    expect(bun.transactionRollback).toBe(true)
+    expect(node.transactionRollback).toBe(true)
+    expect(bun.blobRejected && node.blobRejected).toBe(true)
+  }
   console.info("MCP_JOURNAL_RUNTIME_EVIDENCE", directory, other)
-}, 40000)
+}, 90_000)
 
 test("cold read does not initialize a missing private directory", async () => {
   const directory = await root()
@@ -96,7 +127,11 @@ test("two real processes acquire one flow and a dispatched exchange survives SIG
     const original = JSON.parse(await fs.readFile(path.join(directory, "dispatched.json"), "utf8"))
     killed.kill("SIGKILL")
     await killed.exited
-    const file = path.join(directory, "private", "auth.sqlite")
+    const file = original.file ?? path.join(
+      directory,
+      "private",
+      ...(process.platform === "win32" ? ["mcp-oauth", "journal.sqlite"] : ["auth.sqlite"]),
+    )
     const before = createHash("sha256")
       .update(await fs.readFile(file))
       .digest("hex")
