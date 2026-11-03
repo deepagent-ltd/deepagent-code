@@ -23,6 +23,7 @@ import { Workspace } from "../../src/control-plane/workspace"
 import { registerAdapter } from "../../src/control-plane/adapters"
 import { Project } from "../../src/project/project"
 import { ConfigFileWrite } from "../../src/config/file-write"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { SettingsTransaction } from "../../src/settings/transaction"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 
@@ -168,10 +169,17 @@ const inventory = async (dir: string): Promise<Record<string, string>> => {
     if (entry.isDirectory()) {
       for (const [name, value] of Object.entries(await inventory(file))) result[`${entry.name}/${name}`] = value
     }
-    if (entry.isFile())
-      result[entry.name] = createHash("sha256")
-        .update(await fs.readFile(file))
-        .digest("hex")
+    if (entry.isFile()) {
+      const snapshot = path.join(root, `readonly-snapshot-${crypto.randomUUID()}.sqlite`)
+      const contents =
+        process.platform === "win32" && path.resolve(file) === path.resolve(process.env.DEEPAGENT_CODE_DB!)
+          ? await (async () => {
+              await database.query(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`).run()
+              return fs.readFile(snapshot).finally(() => fs.rm(snapshot, { force: true }))
+            })()
+          : await fs.readFile(file)
+      result[entry.name] = createHash("sha256").update(contents).digest("hex")
+    }
   }
   return result
 }
@@ -395,13 +403,13 @@ const acquired = Promise.withResolvers<void>()
 // while measuring reads so its unrelated reload cannot overlap the full snapshot.
 // A read that enters a writer path must still fail its HTTP deadline.
 const locking = mode === "warm"
-  ? ConfigFileWrite.run(ConfigFileWrite.transaction(
+  ? AppRuntime.runPromise(ConfigFileWrite.transaction(
       [...SettingsTransaction.globalFiles(), ...Object.values(SettingsTransaction.paths())],
       () => Effect.promise(async () => {
         acquired.resolve()
         await release.promise
       }),
-    ))
+    ).pipe(Effect.provide(EffectFlock.defaultLayer)))
   : undefined
 if (locking) await Promise.race([acquired.promise, locking])
 const before = { tables: facts(), config: await inventory(Global.Path.config), project: await inventory(directory) }
