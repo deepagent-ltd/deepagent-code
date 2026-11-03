@@ -57,6 +57,24 @@ export async function directory(workspaceID: string, create = false, allowMissin
     )
       throw new Error({ code: "unsafe" })
     const entries = [] as { path: string; stat: BigIntStats }[]
+    const checkEntries = async () => {
+      if (process.platform !== "win32") {
+        for (const entry of entries) {
+          const current = await fs.lstat(entry.path, { bigint: true })
+          if (!same(current, entry.stat)) throw new Error({ code: "changed" })
+          await privateEntry(entry.path, current, true)
+        }
+        return
+      }
+      const current = [] as { file: string; stat: BigIntStats }[]
+      for (const entry of entries) {
+        const stat = await fs.lstat(entry.path, { bigint: true })
+        if (!same(stat, entry.stat)) throw new Error({ code: "changed" })
+        current.push({ file: entry.path, stat })
+      }
+      if (current.length > 0)
+        await windowsPrivateEntries(current.map((entry) => ({ file: entry.file, directory: true, created: false })))
+    }
     for (const file of [root, workspace]) {
       const created = create
         ? await fs.mkdir(file, { mode: 0o700 }).then(
@@ -83,11 +101,7 @@ export async function directory(workspaceID: string, create = false, allowMissin
                 !same(await fs.lstat(data, { bigint: true }), dataStat)
               )
                 throw new Error({ code: "changed" })
-              for (const entry of entries) {
-                const current = await fs.lstat(entry.path, { bigint: true })
-                if (!same(current, entry.stat)) throw new Error({ code: "changed" })
-                await privateEntry(entry.path, current, true)
-              }
+              await checkEntries()
               if (
                 await fs.lstat(file).then(
                   () => true,
@@ -100,20 +114,24 @@ export async function directory(workspaceID: string, create = false, allowMissin
                 throw new Error({ code: "changed" })
             }),
         }
-      await privateEntry(file, stat, true, created)
+      if (process.platform === "win32" && entries.length > 0) {
+        await windowsPrivateEntries([
+          { file, directory: true, created },
+          ...entries.map((entry) => ({ file: entry.path, directory: true, created: false })),
+          { file, directory: true, created: false },
+        ])
+      } else {
+        await privateEntry(file, stat, true, created)
+      }
       entries.push({ path: file, stat })
     }
     const check = () =>
       attempt(async () => {
         if ((await fs.realpath(Global.Path.data)) !== data || !same(await fs.lstat(data, { bigint: true }), dataStat))
           throw new Error({ code: "changed" })
-        for (const entry of entries) {
-          const current = await fs.lstat(entry.path, { bigint: true })
-          if (!same(current, entry.stat)) throw new Error({ code: "changed" })
-          await privateEntry(entry.path, current, true)
-        }
+        await checkEntries()
       })
-    await check()
+    if (process.platform !== "win32") await check()
     return { path: workspace, check, missing: false }
   })
 }
@@ -291,41 +309,63 @@ const WINDOWS_PRIVATE_SCRIPT = `
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
-$p=$env:DAC_MEDIA_PRIVATE_PATH
-$item=Get-Item -LiteralPath $p -Force
-if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
-if ($env:DAC_MEDIA_PRIVATE_CREATE -eq '1') {
-  $acl=[Security.AccessControl.DirectorySecurity]::new()
-  $acl.SetOwner($sid)
-  $acl.SetAccessRuleProtection($true,$false)
-  foreach ($s in @($sid.Value,'S-1-5-18','S-1-5-32-544')) {
-    $rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($s),[Security.AccessControl.FileSystemRights]::FullControl,([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit),[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
-    $acl.AddAccessRule($rule)
+$count=1
+if ($env:DAC_MEDIA_PRIVATE_COUNT) { $count=[int]$env:DAC_MEDIA_PRIVATE_COUNT }
+for($index=0;$index -lt $count;$index++){
+  $suffix=if($index -eq 0){''}else{"_$index"}
+  $p=[Environment]::GetEnvironmentVariable("DAC_MEDIA_PRIVATE_PATH$suffix")
+  $directory=[Environment]::GetEnvironmentVariable("DAC_MEDIA_PRIVATE_DIRECTORY$suffix") -eq '1'
+  $create=[Environment]::GetEnvironmentVariable("DAC_MEDIA_PRIVATE_CREATE$suffix") -eq '1'
+  $item=Get-Item -LiteralPath $p -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
+  if ($create) {
+    $acl=[Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetOwner($sid)
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($s in @($sid.Value,'S-1-5-18','S-1-5-32-544')) {
+      $rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($s),[Security.AccessControl.FileSystemRights]::FullControl,([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit),[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+      $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $p -AclObject $acl
   }
-  Set-Acl -LiteralPath $p -AclObject $acl
+  $acl=Get-Acl -LiteralPath $p
+  if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'unsafe' }
+  if ($directory -and -not $acl.AreAccessRulesProtected) { throw 'unsafe' }
+  $rules=$acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])
+  if ($rules.Count -eq 0) { throw 'unsafe' }
+  $own=$false
+  foreach ($rule in $rules) {
+    if ($rule.AccessControlType -ne 'Allow' -or $rule.IdentityReference.Value -notin @($sid.Value,'S-1-5-18','S-1-5-32-544')) { throw 'unsafe' }
+    if ($rule.IdentityReference.Value -eq $sid.Value -and ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl) { $own=$true }
+  }
+  if (-not $own) { throw 'unsafe' }
 }
-$acl=Get-Acl -LiteralPath $p
-if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'unsafe' }
-if ($env:DAC_MEDIA_PRIVATE_DIRECTORY -eq '1' -and -not $acl.AreAccessRulesProtected) { throw 'unsafe' }
-$rules=$acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])
-if ($rules.Count -eq 0) { throw 'unsafe' }
-$own=$false
-foreach ($rule in $rules) {
-  if ($rule.AccessControlType -ne 'Allow' -or $rule.IdentityReference.Value -notin @($sid.Value,'S-1-5-18','S-1-5-32-544')) { throw 'unsafe' }
-  if ($rule.IdentityReference.Value -eq $sid.Value -and ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl) { $own=$true }
-}
-if (-not $own) { throw 'unsafe' }
 `
 
+type WindowsPrivateEntry = { file: string; directory: boolean; created: boolean }
+
 export function windowsPrivateInvocation(systemRoot: string, file: string, directory: boolean, created: boolean) {
+  return windowsPrivateEntriesInvocation(systemRoot, [{ file, directory, created }])
+}
+
+function windowsPrivateEntriesInvocation(systemRoot: string, entries: readonly WindowsPrivateEntry[]) {
   if (
-    ![systemRoot, file].every(
+    entries.length === 0 ||
+    ![systemRoot, ...entries.map((entry) => entry.file)].every(
       (value) => path.win32.isAbsolute(value) && !value.includes("\0") && path.win32.parse(value).root.length > 1,
     ) ||
-    (created && !directory)
+    entries.some((entry) => entry.created && !entry.directory)
   )
     throw new Error({ code: "unsafe" })
+  const env: Record<string, string> = { SystemRoot: systemRoot }
+  entries.forEach((entry, index) => {
+    const suffix = index === 0 ? "" : `_${index}`
+    env[`DAC_MEDIA_PRIVATE_PATH${suffix}`] = entry.file
+    env[`DAC_MEDIA_PRIVATE_DIRECTORY${suffix}`] = entry.directory ? "1" : "0"
+    env[`DAC_MEDIA_PRIVATE_CREATE${suffix}`] = entry.created ? "1" : "0"
+  })
+  if (entries.length > 1) env.DAC_MEDIA_PRIVATE_COUNT = String(entries.length)
   return {
     cmd: [
       path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
@@ -335,17 +375,12 @@ export function windowsPrivateInvocation(systemRoot: string, file: string, direc
       "-EncodedCommand",
       Buffer.from(WINDOWS_PRIVATE_SCRIPT, "utf16le").toString("base64"),
     ],
-    env: {
-      SystemRoot: systemRoot,
-      DAC_MEDIA_PRIVATE_PATH: file,
-      DAC_MEDIA_PRIVATE_DIRECTORY: directory ? "1" : "0",
-      DAC_MEDIA_PRIVATE_CREATE: created ? "1" : "0",
-    },
+    env,
   }
 }
 
-async function windowsPrivate(file: string, directory: boolean, created: boolean) {
-  const invocation = windowsPrivateInvocation(process.env.SystemRoot ?? "", file, directory, created)
+async function windowsPrivateEntries(entries: readonly WindowsPrivateEntry[]) {
+  const invocation = windowsPrivateEntriesInvocation(process.env.SystemRoot ?? "", entries)
   const started = Date.now()
   const child = spawn(invocation.cmd[0], invocation.cmd.slice(1), {
     env: invocation.env,
@@ -390,4 +425,8 @@ async function windowsPrivate(file: string, directory: boolean, created: boolean
     clearTimeout(join.timer)
     if (!state.closed) child.kill("SIGKILL")
   }
+}
+
+async function windowsPrivate(file: string, directory: boolean, created: boolean) {
+  return windowsPrivateEntries([{ file, directory, created }])
 }

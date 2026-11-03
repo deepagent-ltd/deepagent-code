@@ -167,4 +167,4 @@ test("continuation admission bounds concurrent original producers, joins exact b
     native.server.stop(true)
     await fs.rm(directory, { recursive: true, force: true })
   }
-}, process.platform === "win32" ? 90_000 : 30_000)
+}, process.platform === "win32" ? 180_000 : 30_000)

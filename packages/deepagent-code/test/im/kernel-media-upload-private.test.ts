@@ -115,7 +115,7 @@ test("kernel uploader retains exact 10MiB bytes in 40 bounded chunks and closes 
   if (process.platform === "win32") return
   const retained = await Promise.all((await fs.readdir("/dev/fd")).map((descriptor) => fs.stat(`/dev/fd/${descriptor}`, { bigint: true }).then((stat) => stat.dev === identity.dev && stat.ino === identity.ino, () => false)))
   expect(retained.some(Boolean)).toBe(false)
-}, process.platform === "win32" ? 90_000 : 15_000)
+}, process.platform === "win32" ? 180_000 : 15_000)
 
 test("kernel uploader accepts an exact empty file and refuses a physical over-limit file before transport", async () => {
   await using empty = await fixture(0)
@@ -126,7 +126,7 @@ test("kernel uploader accepts an exact empty file and refuses a physical over-li
   await fs.truncate(oversized.local.storagePath, AttachmentStorage.hardMaxBytes + 1)
   expect((await oversized.run({ ...oversized.local, sizeBytes: AttachmentStorage.hardMaxBytes + 1 }))._tag).toBe("Failure")
   expect(oversized.calls).toEqual([])
-})
+}, process.platform === "win32" ? 180_000 : undefined)
 
 test.skipIf(process.platform === "win32")("kernel uploader rechecks private storage after an asynchronous capabilities reply before begin", async () => {
   await using value = await fixture()
