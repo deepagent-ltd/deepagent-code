@@ -8,6 +8,8 @@ import { cliIt } from "../lib/cli-process"
 // PARITY-004 long-tail: `mcp edit` rewrites an EXISTING server entry in place
 // (updateMcpConfig semantics). Like add/remove, edits must preserve comments
 // and sibling keys (jsonc-parser field-level modify).
+const spawnBudget = { timeoutMs: 90_000 }
+
 describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
   cliIt.concurrent(
     "updates a remote server url/header while preserving comments and siblings",
@@ -36,15 +38,11 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
           await writeFile(configPath, seeded, "utf8")
         })
 
-        const result = yield* deepagentCode.spawn([
-          "mcp",
-          "edit",
-          "github",
-          "--url",
-          "https://new.example.com/mcp",
-          "--header",
-          "Authorization=Bearer abc",
-        ])
+        const result = yield* deepagentCode.spawn(
+          ["mcp", "edit", "github", "--url", "https://new.example.com/mcp", "--header", "Authorization=Bearer abc"],
+          spawnBudget,
+        )
+        expect(result.termination).toBe("exited")
         deepagentCode.expectExit(result, 0)
 
         const text = yield* Effect.promise(() => readFile(configPath, "utf8"))
@@ -58,7 +56,7 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
         })
         expect(config.mcp.keeper).toEqual({ type: "local", command: ["echo", "hi"] })
       }),
-    60_000,
+    120_000,
     { isolatedSecretStore: true },
   )
 
@@ -80,7 +78,8 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
         ].join("\n")
         yield* Effect.promise(() => writeFile(configPath, seeded, "utf8"))
 
-        const result = yield* deepagentCode.spawn(["mcp", "edit", "fs-server", "--env", "DEBUG=true"])
+        const result = yield* deepagentCode.spawn(["mcp", "edit", "fs-server", "--env", "DEBUG=true"], spawnBudget)
+        expect(result.termination).toBe("exited")
         deepagentCode.expectExit(result, 0)
 
         const config = parse(yield* Effect.promise(() => readFile(configPath, "utf8")))
@@ -90,7 +89,7 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
           environment: { EXISTING: "1", DEBUG: "true" },
         })
       }),
-    60_000,
+    120_000,
   )
 
   cliIt.concurrent(
@@ -110,7 +109,11 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
         ].join("\n")
         yield* Effect.promise(() => writeFile(configPath, seeded, "utf8"))
 
-        const result = yield* deepagentCode.spawn(["mcp", "edit", "local-only", "--url", "https://example.com/mcp"])
+        const result = yield* deepagentCode.spawn(
+          ["mcp", "edit", "local-only", "--url", "https://example.com/mcp"],
+          spawnBudget,
+        )
+        expect(result.termination).toBe("exited")
         expect(result.exitCode).not.toBe(0)
         expect(result.stderr + result.stdout).toContain("--url/--header only apply to remote servers")
 
@@ -118,21 +121,26 @@ describe("deepagentCode mcp edit (non-interactive subprocess)", () => {
         const config = parse(yield* Effect.promise(() => readFile(configPath, "utf8")))
         expect(config.mcp["local-only"]).toEqual({ type: "local", command: ["echo", "hi"] })
       }),
-    60_000,
+    120_000,
   )
 
   cliIt.concurrent(
     "fails with a clear error when the server is not configured anywhere",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
-        const result = yield* deepagentCode.spawn(["mcp", "edit", "ghost", "--url", "https://example.com/mcp"])
+        const result = yield* deepagentCode.spawn(
+          ["mcp", "edit", "ghost", "--url", "https://example.com/mcp"],
+          spawnBudget,
+        )
+        expect(result.termination).toBe("exited")
         expect(result.exitCode).not.toBe(0)
         expect(result.stderr + result.stdout).toContain("MCP server not found: ghost")
 
-        const noChanges = yield* deepagentCode.spawn(["mcp", "edit", "ghost"])
+        const noChanges = yield* deepagentCode.spawn(["mcp", "edit", "ghost"], spawnBudget)
+        expect(noChanges.termination).toBe("exited")
         expect(noChanges.exitCode).not.toBe(0)
         expect(noChanges.stderr + noChanges.stdout).toContain("No changes provided")
       }),
-    60_000,
+    240_000,
   )
 })

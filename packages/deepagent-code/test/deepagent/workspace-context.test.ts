@@ -49,7 +49,7 @@ describe("DeepAgentWorkspace", () => {
 
     expect(result.hasPython).toBe(true)
     expect(result.gitBranch).toBe("audit-branch")
-    expect(result.gitRoot).toBe(await fs.realpath(root))
+    expect(result.gitRoot && path.normalize(result.gitRoot)).toBe(await fs.realpath(root))
   })
 
   test("detects Go modules and exposes their validation command", async () => {

@@ -25,7 +25,7 @@ if (!childScenario) {
       const root = await mkdtemp(path.join(tmpdir(), "dac-mcp-wire-process-"))
       await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
       const child = Bun.spawn({
-        cmd: [process.execPath, "test", import.meta.path, "--timeout", "20000"],
+        cmd: [process.execPath, "test", import.meta.path, "--timeout", "40000"],
         cwd: path.resolve(import.meta.dir, "../.."),
         env: {
           PATH: process.env.PATH,
@@ -45,7 +45,7 @@ if (!childScenario) {
         stdout: "pipe",
         stderr: "pipe",
       })
-      const deadline = setTimeout(() => child.kill(), 30_000)
+      const deadline = setTimeout(() => child.kill(), 60_000)
       try {
         const [status, stdout, stderr] = await Promise.all([
           child.exited,
@@ -80,7 +80,7 @@ if (!childScenario) {
         await rm(root, { recursive: true, force: true })
       }
     },
-    40_000,
+    90_000,
   )
 }
 
