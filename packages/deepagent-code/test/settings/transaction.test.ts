@@ -1,56 +1,75 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
+import type { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
+
+const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const directory = path.join(process.env.RUNNER_TEMP ?? path.resolve(import.meta.dir, "../../.artifacts"),
+    "windows-native-settings-transaction")
+  await fs.mkdir(directory, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: path.join(import.meta.dir, "transaction-process.ts"),
+    extraSources: [import.meta.path, ...["auth", "account", "npm"].map((name) => path.resolve(import.meta.dir, `../fake/${name}.ts`))],
+  })
+}, 240_000)
+afterAll(async () => { await native.cohort?.dispose() })
 
 async function fixture(body: (root: string) => Promise<void>) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-settings-tx-")))
-  await fs.mkdir(path.join(root, "storage"), { mode: 0o700 })
-  await fs.mkdir(path.join(root, "workspace"), { mode: 0o700 })
-  await fs.mkdir(path.join(root, "tmp"), { mode: 0o700 })
-  await fs.writeFile(path.join(root, "storage", "config.jsonc"), '// 保留原注释\n{"model":"original/current"}', {
-    mode: 0o600,
-  })
-  await fs.writeFile(
-    path.join(root, "storage", "settings.json"),
-    JSON.stringify({ deepagent: { agentMode: "general", selfLearning: "manual" } }),
-    { mode: 0o600 },
-  )
+  const root = await fs.realpath(await fs.mkdtemp(path.join(native.cohort?.root ?? os.tmpdir(), "dac-settings-tx-")))
   try {
+    await fs.mkdir(path.join(root, "storage"), { mode: 0o700 })
+    await fs.mkdir(path.join(root, "workspace"), { mode: 0o700 })
+    await fs.mkdir(path.join(root, "tmp"), { mode: 0o700 })
+    await fs.writeFile(path.join(root, "storage", "config.jsonc"), '// 保留原注释\n{"model":"original/current"}', {
+      mode: 0o600,
+    })
+    if (native.cohort) {
+      const seed = await run(root, "seed")
+      expect(seed.code, seed.diagnostic).toBe(0)
+    } else {
+      await fs.writeFile(
+        path.join(root, "storage", "settings.json"),
+        JSON.stringify({ deepagent: { agentMode: "general", selfLearning: "manual" } }),
+        { mode: 0o600 },
+      )
+    }
     await body(root)
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }
 }
 
-function start(root: string, mode: string, stage?: string) {
-  return Bun.spawn({
-    cmd: [
-      process.execPath,
-      path.join(import.meta.dir, "transaction-process.ts"),
-      root,
-      mode,
-      ...(stage ? [stage] : []),
-    ],
-    cwd: path.resolve(import.meta.dir, "../.."),
-    env: {
-      PATH: process.env.PATH,
-      HOME: path.join(root, "home"),
-      DEEPAGENT_CODE_TEST_HOME: root,
-      DEEPAGENT_CODE_HOME: path.join(root, "storage"),
-      TMPDIR: path.join(root, "tmp"),
-      DEEPAGENT_CODE_DB: path.join(root, "storage", "database.sqlite"),
-      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
-      DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+async function start(root: string, mode: string, resultID: string, stage = "") {
+  const args = [root, mode, stage, resultID]
+  const env = {
+    HOME: path.join(root, "home"),
+    DEEPAGENT_CODE_TEST_HOME: root,
+    DEEPAGENT_CODE_HOME: path.join(root, "storage"),
+    TMPDIR: path.join(root, "tmp"),
+    DEEPAGENT_CODE_DB: path.join(root, "storage", "database.sqlite"),
+    DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
+    DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
+  }
+  const invocation = native.cohort
+    ? await native.cohort.invocation({ args, env, inheritEnvironment: false })
+    : {
+        cmd: [process.execPath, path.join(import.meta.dir, "transaction-process.ts"), ...args],
+        cwd: path.resolve(import.meta.dir, "../.."),
+        env: { ...env, PATH: process.env.PATH },
+      }
+  return Bun.spawn({ ...invocation, stdout: "pipe", stderr: "pipe" })
 }
 
 async function run(root: string, mode: string) {
-  const child = start(root, mode)
+  const resultID = randomUUID()
+  const resultPath = path.join(root, `child-result-${resultID}.json`)
+  const child = await start(root, mode, resultID)
   const timer = setTimeout(() => child.kill("SIGKILL"), 15_000)
   try {
     const [code, stdout, stderr] = await Promise.all([
@@ -64,13 +83,13 @@ async function run(root: string, mode: string) {
       pid: child.pid,
       exitCode: code,
       signal: child.signalCode,
-      resultPath: path.join(root, `child-result-${child.pid}.json`),
+      resultPath,
       stdout: stdout.slice(-65536),
       stderr: stderr.slice(-65536),
     })
     if (stdout.length + stderr.length > 1_048_576)
       throw new Error(`Private fixture output exceeded bound: ${diagnostic}`)
-    const result = (await Bun.file(path.join(root, `child-result-${child.pid}.json`))
+    const result = (await Bun.file(resultPath)
       .json()
       .catch((error: unknown) => {
         throw new Error(`Private settings fixture result unavailable: ${diagnostic}`, { cause: error })
@@ -88,51 +107,51 @@ async function run(root: string, mode: string) {
 }
 
 async function pauseAndKill(root: string, stage: string, actualExpiry = false) {
-  const child = start(root, "global", stage)
+  const child = await start(root, "global", randomUUID(), stage)
   const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
   const timer = setTimeout(() => child.kill("SIGKILL"), 15_000)
   try {
+    const pausedPath = path.join(root, "paused")
     const deadline = Date.now() + 12_000
-    while (!(await Bun.file(path.join(root, "paused")).exists()) && Date.now() < deadline && child.exitCode === null)
-      await Bun.sleep(10)
-    const paused = await Bun.file(path.join(root, "paused")).exists()
-    if (!paused) {
-      child.kill("SIGKILL")
-      await child.exited
-      const [stdout, stderr] = await output
-      expect(
-        Boolean(paused),
-        JSON.stringify({
-          root,
-          stage,
-          pid: child.pid,
-          exitCode: child.exitCode,
-          signal: child.signalCode,
-          pausedPath: path.join(root, "paused"),
-          resultPath: path.join(root, `child-result-${child.pid}.json`),
-          stdout: stdout.slice(-65536),
-          stderr: stderr.slice(-65536),
-        }),
-      ).toBe(true)
+    let paused: { kind: string; stage: string; pid: number } | undefined
+    while (!paused && Date.now() < deadline && child.exitCode === null) {
+      paused = await Bun.file(pausedPath).json().catch(() => undefined)
+      if (!paused) await Bun.sleep(10)
     }
-    expect(paused).toBe(true)
     child.kill("SIGKILL")
     await child.exited
-    expect(
-      child.signalCode,
-      child.signalCode === "SIGKILL"
-        ? undefined
-        : JSON.stringify({
-            root,
-            stage,
-            pid: child.pid,
-            exitCode: child.exitCode,
-            signal: child.signalCode,
-            pausedPath: path.join(root, "paused"),
-            resultPath: path.join(root, `child-result-${child.pid}.json`),
-            output: (await output).map((value) => value.slice(-65536)),
-          }),
-    ).toBe("SIGKILL")
+    const bytes = await output
+    const diagnostic = JSON.stringify({
+      root,
+      stage,
+      launcher: child.pid,
+      exitCode: child.exitCode,
+      signal: child.signalCode,
+      pausedPath,
+      output: bytes.map((value) => value.slice(-65536)),
+    })
+    expect(paused?.stage, diagnostic).toBe(stage)
+    expect(paused?.kind, diagnostic).toBe(native.cohort && stage !== "config.jsonc" ? "native" : "rename")
+    expect(child.signalCode, diagnostic).toBe("SIGKILL")
+    const owner = paused!.pid
+    if (native.cohort) {
+      // The Native launcher owns the business subprocess in a KILL_ON_JOB_CLOSE Job.
+      // Its PID, rather than the launcher PID, owns the on-disk transaction locks.
+      expect(Number.isSafeInteger(owner) && owner > 0 && owner !== child.pid, diagnostic).toBe(true)
+      const retired = Date.now() + 3_000
+      for (;;) {
+        try {
+          process.kill(owner, 0)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") break
+          throw error
+        }
+        if (Date.now() >= retired) throw new Error(`Native Settings lock owner remains active: ${diagnostic}`)
+        await Bun.sleep(10)
+      }
+    } else {
+      expect(owner, diagnostic).toBe(child.pid)
+    }
     if (actualExpiry) await Bun.sleep(61_000)
     if (!actualExpiry) {
       // Other cases mature only this confirmed-dead fixture owner's original heartbeat.
@@ -141,25 +160,11 @@ async function pauseAndKill(root: string, stage: string, actualExpiry = false) {
       for (const name of await fs.readdir(locks)) {
         const directory = path.join(locks, name)
         const meta = await Bun.file(path.join(directory, "meta.json")).json()
-        if (meta.pid !== child.pid) throw new Error("Foreign fixture lock owner")
+        if (meta.pid !== owner) throw new Error("Foreign fixture lock owner")
         await fs.utimes(path.join(directory, "heartbeat"), new Date(Date.now() - 61_000), new Date(Date.now() - 61_000))
       }
     }
-    const bytes = await output
-    expect(
-      bytes.join("").length,
-      JSON.stringify({
-        root,
-        stage,
-        pid: child.pid,
-        exitCode: child.exitCode,
-        signal: child.signalCode,
-        pausedPath: path.join(root, "paused"),
-        resultPath: path.join(root, `child-result-${child.pid}.json`),
-        stdout: bytes[0].slice(-65536),
-        stderr: bytes[1].slice(-65536),
-      }),
-    ).toBeLessThan(1_048_576)
+    expect(bytes.join("").length, diagnostic).toBeLessThan(1_048_576)
   } finally {
     clearTimeout(timer)
     child.kill("SIGKILL")
@@ -361,13 +366,23 @@ test("private settings reject unsafe inode, invalid UTF8 and excess bytes before
   for (const boundary of ["mode", "hardlink", "utf8", "capacity"])
     await fixture(async (root) => {
       const file = path.join(root, "storage", "settings.json")
-      if (boundary === "mode") await fs.chmod(file, 0o644)
+      if (boundary === "mode" && native.cohort) {
+        const { windowsNativePublisherTools } = await import("../../../desktop/scripts/test-native-publisher")
+        const acl = Bun.spawnSync([windowsNativePublisherTools().acl, file, "/grant:r", "*S-1-1-0:(W)"], {
+          stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+        })
+        expect(acl.exitCode, acl.stderr.toString()).toBe(0)
+      }
+      if (boundary === "mode" && !native.cohort) await fs.chmod(file, 0o644)
       if (boundary === "hardlink") await fs.link(file, path.join(root, "linked.json"))
       if (boundary === "utf8") await fs.writeFile(file, Buffer.from([0xc0, 0xaf]))
       if (boundary === "capacity") await fs.writeFile(file, Buffer.alloc(1_048_577, 32))
       const before = await Bun.file(file).arrayBuffer()
       const result = await run(root, "direct")
       expect(result.code, result.diagnostic).toBe(1)
+      if (native.cohort) {
+        expect(result.diagnostic).toContain("PRIVATE_STORAGE_FAILURE stage=read-storage")
+      }
       expect(result.writes).toEqual([])
       expect(await Bun.file(file).arrayBuffer()).toEqual(before)
       expect(await Bun.file(path.join(root, "storage", ".settings-operation.json")).exists()).toBe(false)
