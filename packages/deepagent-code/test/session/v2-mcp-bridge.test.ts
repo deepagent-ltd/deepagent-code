@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { jsonSchema } from "ai"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from "effect"
+import { Cause, Context, DateTime, Effect, Exit, Fiber, Layer, ManagedRuntime, Option } from "effect"
 import { ToolCallID, ToolFailure } from "@deepagent-code/llm"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Tool } from "@deepagent-code/core/tool/tool"
@@ -83,8 +83,10 @@ describe("V2McpBridge abort parity", () => {
       location?: Location.Interface
       session?: SessionSchema.Info
       getSession?: SessionStore.Interface["get"]
+      observeRoot?: (value: string) => void
     } = {},
   ) => {
+    const rootPort = Context.Reference<string>("V2McpBridge.test.rootPort", { defaultValue: () => "missing" })
     for (const [key, item] of Object.entries(tools)) {
       const [server, name] = key.split(":")
       if (server && name)
@@ -130,7 +132,10 @@ describe("V2McpBridge abort parity", () => {
               MCP.Service.of({
                 status: () => Effect.die("unused"),
                 clients: () => Effect.die("unused"),
-                tools: () => Effect.succeed(tools as never),
+                tools: () => Effect.map(rootPort, (value) => {
+                  options.observeRoot?.(value)
+                  return tools as never
+                }),
                 prompts: () => Effect.die("unused"),
                 resources: () => Effect.die("unused"),
                 add: () => Effect.die("unused"),
@@ -150,10 +155,22 @@ describe("V2McpBridge abort parity", () => {
               }),
             ),
           ),
+          Layer.provide(Layer.effectContext(Effect.succeed(Context.make(rootPort, "root")))),
         ),
       ),
     )
   }
+
+  test("retains root-owned private ports across instance initialization", async () => {
+    const observed: string[] = []
+    const rt = runtime({}, new Set(), { observeRoot: (value) => observed.push(value) })
+    try {
+      await rt.runPromise(InstanceRegistry.initializeInstance(instance))
+      expect(observed).toEqual(["root"])
+    } finally {
+      await rt.dispose()
+    }
+  })
 
   test("registering settles an MCP tool result as model-visible text", async () => {
     const rt = runtime({

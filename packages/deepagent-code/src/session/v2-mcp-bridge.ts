@@ -18,6 +18,7 @@ import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ToolProvenance } from "@/tool/provenance"
+import { EffectBridge } from "@/effect/bridge"
 
 const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "_")
 
@@ -51,9 +52,10 @@ export const layer = Layer.effectDiscard(
     const applications = yield* ApplicationTools.Service
     const registry = yield* InstanceRegistry.Service
     const events = yield* EventV2Bridge.Service
+    const bridge = yield* EffectBridge.make()
 
     registry.registerInitializer((context) =>
-      Effect.runPromise(
+      bridge.promise(
         Effect.gen(function* () {
           const semaphore = yield* Semaphore.make(1)
           let scope: Scope.Scope | undefined
@@ -233,7 +235,7 @@ export const layer = Layer.effectDiscard(
             ? yield* mcp.watchConfig().pipe(Effect.provideService(InstanceRef, context))
             : () => {}
           InstanceRegistry.registerInstanceStateDisposer(context, () =>
-            Effect.runPromise(
+            bridge.promise(
               semaphore.withPermit(
                 Effect.gen(function* () {
                   disposed = true
