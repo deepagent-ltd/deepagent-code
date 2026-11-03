@@ -92,6 +92,8 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   if (options?.git) {
     await $`git init`.cwd(dirpath).quiet()
     await $`git config core.fsmonitor false`.cwd(dirpath).quiet()
+    await $`git config core.autocrlf false`.cwd(dirpath).quiet()
+    await $`git config core.eol lf`.cwd(dirpath).quiet()
     await $`git config commit.gpgsign false`.cwd(dirpath).quiet()
     await $`git config user.email "test@deepagent-code.test"`.cwd(dirpath).quiet()
     await $`git config user.name "Test"`.cwd(dirpath).quiet()

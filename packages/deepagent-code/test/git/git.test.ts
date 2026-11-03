@@ -170,7 +170,7 @@ describe("Git", () => {
 
       expect(yield* git.repository(tmp.path)).toBeUndefined()
       expect((yield* git.initialize(tmp.path)).exitCode).toBe(0)
-      expect(yield* git.repository(tmp.path)).toEqual(expect.objectContaining({ root: tmp.path, prefix: "" }))
+      expect(yield* git.repository(tmp.path)).toEqual(expect.objectContaining({ root: tmp.path.replaceAll(path.sep, "/"), prefix: "" }))
 
       yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "new.txt"), "new\n", "utf-8"))
       expect(yield* git.porcelainStatus(tmp.path)).toEqual(
