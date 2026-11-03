@@ -1,6 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { hardenedGitArgs } from "../../src/worktree/index"
@@ -56,8 +55,10 @@ describe("I33-5 hardenedGitArgs — end-to-end against a hostile repo", () => {
     git(["config", "user.email", "t@t.t"])
     git(["config", "user.name", "t"])
     // Malicious external diff driver + textconv, wired to a file via .gitattributes.
-    git(["config", "diff.evil.external", `/bin/sh -c "touch ${path.join(sentinelDir, "PWNED_EXTERNAL")}"`])
-    git(["config", "diff.evil.textconv", `/bin/sh -c "touch ${path.join(sentinelDir, "PWNED_TEXTCONV")}" <`])
+    // Git runs drivers from the repository root through its shell, including Git for Windows.
+    const sentinel = `../${path.basename(sentinelDir)}`
+    git(["config", "diff.evil.external", `/bin/sh -c 'touch -- "$1"' sh ${sentinel}/PWNED_EXTERNAL`])
+    git(["config", "diff.evil.textconv", `/bin/sh -c 'touch -- "$1"' sh ${sentinel}/PWNED_TEXTCONV`])
     writeFileSync(path.join(repo, ".gitattributes"), "f.txt diff=evil\n")
     writeFileSync(path.join(repo, "f.txt"), "v1\n")
     git(["add", "f.txt", ".gitattributes"])
