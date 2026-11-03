@@ -8,6 +8,7 @@ import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
 import { adaptCustomTool, customToolName } from "@/tool/custom-tool-adapter"
 import { CustomToolRejections } from "@/tool/custom-tool-rejections"
+import { EffectBridge } from "@/effect/bridge"
 
 // These capabilities retain app-owned services and flags; the Core V2 registry owns their
 // advertised definitions and settlement after this instance-scoped registration.
@@ -24,9 +25,10 @@ export const layer = Layer.effectDiscard(
     const registry = yield* ToolRegistry.Service
     const applications = yield* ApplicationTools.Service
     const instanceRegistry = yield* InstanceRegistry.Service
+    const bridge = yield* EffectBridge.make()
 
     instanceRegistry.registerInitializer((context) =>
-      Effect.runPromise(
+      bridge.promise(
         Effect.gen(function* () {
           const semaphore = yield* Semaphore.make(1)
           let scope: Scope.Scope | undefined
@@ -82,7 +84,7 @@ export const layer = Layer.effectDiscard(
                 .pipe(Effect.provideService(InstanceRef, context))
             : () => {}
           InstanceRegistry.registerInstanceStateDisposer(context, () =>
-            Effect.runPromise(
+            bridge.promise(
               semaphore.withPermit(
                 Effect.gen(function* () {
                   disposed = true
@@ -100,7 +102,7 @@ export const layer = Layer.effectDiscard(
               Effect.annotateLogs({ directory: context.directory, cause }),
             ),
           ),
-          // This initializer runs outside AppRuntime. Keep diagnostics off the CLI response stream.
+          // Keep diagnostics off the CLI response stream; EffectBridge retains the root-owned Native ports.
           Effect.provide(bridgeLogger),
         ),
       ),

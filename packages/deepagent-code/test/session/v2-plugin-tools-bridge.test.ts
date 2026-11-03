@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime, Option, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Layer, ManagedRuntime, Option, Stream } from "effect"
 import { Schema } from "effect"
 import { ToolCallID, ToolFailure } from "@deepagent-code/llm"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
@@ -201,6 +201,8 @@ describe("V2PluginToolsBridge native execution semantics", () => {
   test("registers app-owned tools from the instance roster and removes them on disposal", async () => {
     const hostInstance = { ...instance }
     const hostIDs = ["lsp", "profile", "debug", "query_log"]
+    const rootPort = Context.Reference<string>("V2PluginToolsBridge.test.rootPort", { defaultValue: () => "missing" })
+    const observed: string[] = []
     const hostRt = ManagedRuntime.make(
       Layer.mergeAll(
         ApplicationTools.layer,
@@ -212,14 +214,21 @@ describe("V2PluginToolsBridge native execution semantics", () => {
             ids: () => Effect.succeed(hostIDs),
             all: () => Effect.succeed(hostIDs.map((id) => ({ ...metadataTool, id }))),
             custom: () => Effect.succeed([]),
+            watchCustom: () => Effect.map(rootPort, (value) => {
+              observed.push(value)
+              return () => {}
+            }),
             named: () => Effect.die("unused"),
             tools: () => Effect.die("unused"),
           }))),
+          // A root-owned Windows Settings port must survive the initializer's Promise boundary.
+          Layer.provide(Layer.effectContext(Effect.succeed(Context.make(rootPort, "root")))),
         ),
       ),
     )
     try {
       await hostRt.runPromise(InstanceRegistry.initializeInstance(hostInstance))
+      expect(observed).toEqual(["root"])
       expect(await hostRt.runPromise(Effect.map(ApplicationTools.Service, (service) =>
         [...service.entries().keys()].toSorted()))).toEqual(hostIDs.toSorted())
       await hostRt.runPromise(InstanceRegistry.disposeInstanceState(hostInstance))

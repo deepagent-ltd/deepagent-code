@@ -15,7 +15,6 @@ import { Workspace } from "../../src/control-plane/workspace"
 
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
-import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
@@ -74,11 +73,7 @@ const workspaceLayer = Workspace.defaultLayer.pipe(
   Layer.provide(InstanceStore.defaultLayer),
   Layer.provide(InstanceBootstrap.defaultLayer),
 )
-const instanceStoreLayer = InstanceStore.defaultLayer.pipe(
-  Layer.provide(
-    Layer.succeed(InstanceBootstrapService.Service, InstanceBootstrapService.Service.of({ run: Effect.void })),
-  ),
-)
+const instanceStoreLayer = InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
   HttpApiApp.routes,
   {
