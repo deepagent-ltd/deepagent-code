@@ -227,17 +227,14 @@ export namespace SettingsStore {
   }
 
   /** Direct and Config writers share canonical sorted locks and the same durable protocol. */
-  export async function update(patch: {
-    deepagent?: DeepAgentSettings
-    providers?: Record<string, TransportSettings>
-  }): Promise<{ settings: Settings; changed: boolean }> {
-    const result = await ConfigFileWrite.run(
-      SettingsTransaction.apply({
-        files: [],
-        request: { kind: "settings", patch },
-        prepare: (_tx, current) => ({ settings: merge(current, patch), value: undefined }),
-      }),
-    )
-    return { settings: result.settings, changed: result.changed }
+  export const updateEffect = (patch: Parameters<typeof merge>[1]) =>
+    SettingsTransaction.apply({
+      files: [],
+      request: { kind: "settings", patch },
+      prepare: (_tx, current) => ({ settings: merge(current, patch), value: undefined }),
+    }).pipe(Effect.map((result) => ({ settings: result.settings, changed: result.changed })))
+
+  export async function update(patch: Parameters<typeof merge>[1]) {
+    return ConfigFileWrite.run(updateEffect(patch))
   }
 }

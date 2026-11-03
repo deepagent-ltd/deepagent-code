@@ -1,9 +1,23 @@
-import { test, expect, describe, afterEach, beforeEach } from "bun:test"
-import fs from "fs/promises"
-import os from "os"
-import path from "path"
+import { test, expect, describe, afterAll, afterEach, beforeAll, beforeEach } from "bun:test"
+import fs from "node:fs/promises"
+import path from "node:path"
 import { SettingsStore } from "@/settings/store"
-import { tmpRootAsync } from "../fixture/fixture"
+import type { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
+import { registerSettingsStoreCases } from "./store.cases"
+
+const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const directory = path.resolve(import.meta.dir, "../../.artifacts/windows-native-settings-store")
+  await fs.mkdir(directory, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: path.join(import.meta.dir, "store-process.ts"),
+    extraSources: [import.meta.path, path.join(import.meta.dir, "store.cases.ts")],
+  })
+}, 240_000)
+afterAll(async () => { await native.cohort?.dispose() })
 
 // SettingsStore resolves its file under Global.Path.data. BOTH variables are required to point it at
 // a throwaway dir: `resolveDataPath` (global-path.ts) honours DEEPAGENT_CODE_HOME only alongside the
@@ -14,6 +28,8 @@ const prevHome = process.env.DEEPAGENT_CODE_HOME
 const prevTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
 
 beforeEach(async () => {
+  if (process.platform === "win32") return
+  const { tmpRootAsync } = await import("../fixture/fixture")
   home = await tmpRootAsync()
   process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
@@ -21,6 +37,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  if (process.platform === "win32") return
   if (prevHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
   else process.env.DEEPAGENT_CODE_HOME = prevHome
   if (prevTestHome === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
@@ -29,211 +46,28 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true }).catch(() => {})
 })
 
-const settingsFile = () => path.join(home, "settings.json")
-
 describe("SettingsStore", () => {
-  test("missing file reads as empty settings", async () => {
-    expect(await SettingsStore.read()).toEqual({})
-  })
-
-  test("refuses to overwrite a corrupt settings file", async () => {
-    await fs.writeFile(settingsFile(), "{broken", { mode: 0o600 })
-
-    await expect(SettingsStore.read()).rejects.toThrow("Cannot read settings")
-    await expect(SettingsStore.update({ deepagent: { agentMode: "high" } })).rejects.toThrow("Cannot read settings")
-    expect(await fs.readFile(settingsFile(), "utf8")).toBe("{broken")
-  })
-
-  test("update persists deepagent settings and reports changed", async () => {
-    const first = await SettingsStore.update({
-      deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" },
-    })
-    expect(first.changed).toBe(true)
-    expect(first.settings.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
-
-    SettingsStore.invalidate()
-    const reread = await SettingsStore.read()
-    expect(reread.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
-
-    // file exists and is valid JSON
-    const raw = JSON.parse(await fs.readFile(settingsFile(), "utf8"))
-    expect(raw.deepagent.agentMode).toBe("xhigh")
-  })
-
-  // Tier-2 legacy-compat: an existing user's settings.json written before the wish→intelligence
-  // rename still carries `wishModel` and `promptMode: "wish"`. Read must accept both and normalize
-  // to the canonical `intelligenceModel` / "intelligence" (read-old, write-new).
-  test("reads legacy wishModel and promptMode 'wish' as intelligence", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { promptMode: "wish", wishModel: "zhipuai/glm-4.7" } }),
-      { mode: 0o600 },
-    )
-    SettingsStore.invalidate()
-    const reread = await SettingsStore.read()
-    expect(reread.deepagent).toEqual({ promptMode: "intelligence", intelligenceModel: "zhipuai/glm-4.7" })
-  })
-
-  test("prefers the new intelligenceModel key over legacy wishModel when both are present", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { intelligenceModel: "openai/gpt-5", wishModel: "zhipuai/glm-4.7" } }),
-      { mode: 0o600 },
-    )
-    SettingsStore.invalidate()
-    const reread = await SettingsStore.read()
-    expect(reread.deepagent).toEqual({ intelligenceModel: "openai/gpt-5" })
-  })
-
-  test("no-op update reports unchanged", async () => {
-    await SettingsStore.update({ deepagent: { agentMode: "high" } })
-    const again = await SettingsStore.update({ deepagent: { agentMode: "high" } })
-    expect(again.changed).toBe(false)
-  })
-
-  test("merges partial deepagent patches", async () => {
-    await SettingsStore.update({ deepagent: { agentMode: "high" } })
-    const merged = await SettingsStore.update({ deepagent: { selfLearning: "auto" } })
-    expect(merged.settings.deepagent).toEqual({ agentMode: "high", selfLearning: "auto" })
-  })
-
-  test("serializes concurrent disjoint updates without losing either field", async () => {
-    await Promise.all([
-      SettingsStore.update({ deepagent: { agentMode: "xhigh" } }),
-      SettingsStore.update({ deepagent: { selfLearning: "auto" } }),
-    ])
-
-    SettingsStore.invalidate()
-    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "xhigh", selfLearning: "auto" })
-  })
-
-  test("re-reads disk under the update lock instead of merging from a stale cache", async () => {
-    await SettingsStore.update({ deepagent: { agentMode: "high" } })
-    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { selfLearning: "manual" } }), { mode: 0o600 })
-
-    await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
-    SettingsStore.invalidate()
-    expect((await SettingsStore.read()).deepagent).toEqual({ selfLearning: "manual", subagentIntensity: "downgrade" })
-  })
-
-  test("subagentIntensity round-trips (write → read back)", async () => {
-    const w = await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
-    expect(w.changed).toBe(true)
-    expect(w.settings.deepagent).toEqual({ subagentIntensity: "downgrade" })
-
-    SettingsStore.invalidate()
-    const reread = await SettingsStore.read()
-    expect(reread.deepagent).toEqual({ subagentIntensity: "downgrade" })
-
-    // "inherit" is also accepted
-    const inherit = await SettingsStore.update({ deepagent: { subagentIntensity: "inherit" } })
-    expect(inherit.settings.deepagent).toEqual({ subagentIntensity: "inherit" })
-  })
-
-  test("invalid subagentIntensity is dropped on read", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { subagentIntensity: "bogus", agentMode: "high" } }),
-      { mode: 0o600 },
-    )
-    SettingsStore.invalidate()
-    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
-  })
-
-  // V3.9 §C: the global Expert Panel default seeds each new conversation's armed state.
-  test("expertPanelDefault round-trips (write → read back)", async () => {
-    const w = await SettingsStore.update({ deepagent: { expertPanelDefault: true } })
-    expect(w.changed).toBe(true)
-    expect(w.settings.deepagent).toEqual({ expertPanelDefault: true })
-
-    SettingsStore.invalidate()
-    expect((await SettingsStore.read()).deepagent).toEqual({ expertPanelDefault: true })
-  })
-
-  test("non-boolean expertPanelDefault is dropped on read", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }),
-      { mode: 0o600 },
-    )
-    SettingsStore.invalidate()
-    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
-  })
-
-  test("keeps transport only for official providers", async () => {
-    const result = await SettingsStore.update({
-      providers: {
-        zhipuai: { headerTimeout: 15000, maxRetries: 3 },
-        // not an official provider — must be dropped
-        "some-third-party": { headerTimeout: 999 } as never,
-      },
-    })
-    expect(result.settings.providers).toEqual({ zhipuai: { headerTimeout: 15000, maxRetries: 3 } })
-  })
-
-  test("newly-official zhipu family is accepted", async () => {
-    const result = await SettingsStore.update({
-      providers: {
-        "zhipuai-coding-plan": { headerTimeout: 20000 },
-        zai: { timeout: 60000 },
-        "zai-coding-plan": { chunkTimeout: 30000 },
-      },
-    })
-    expect(result.settings.providers).toEqual({
-      "zhipuai-coding-plan": { headerTimeout: 20000 },
-      zai: { timeout: 60000 },
-      "zai-coding-plan": { chunkTimeout: 30000 },
-    })
-  })
-
-  test("headerTimeout=false (disabled) is preserved; invalid values dropped", async () => {
-    const result = await SettingsStore.update({
-      providers: { openai: { headerTimeout: false, chunkTimeout: -1 as never, maxRetries: 0 as never } },
-    })
-    // false kept; negative chunkTimeout and non-positive maxRetries dropped
-    expect(result.settings.providers).toEqual({ openai: { headerTimeout: false } })
-  })
-
-  test("removing all transport keys for a provider drops the entry", async () => {
-    await SettingsStore.update({ providers: { openai: { headerTimeout: 10000 } } })
-    const cleared = await SettingsStore.update({ providers: { openai: { headerTimeout: undefined as never } } })
-    expect(cleared.settings.providers).toBeUndefined()
-  })
-
-  test("baseURL override for an official provider round-trips (proxy/gateway routing)", async () => {
-    const result = await SettingsStore.update({
-      providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1", maxRetries: 5 } },
-    })
-    expect(result.settings.providers).toEqual({
-      openai: { baseURL: "https://proxy.corp.internal/openai/v1", maxRetries: 5 },
-    })
-  })
-
-  test("http(s) baseURL accepted; malformed / non-http endpoints dropped", async () => {
-    const ok = await SettingsStore.update({ providers: { openai: { baseURL: "http://localhost:8080/v1" } } })
-    expect(ok.settings.providers).toEqual({ openai: { baseURL: "http://localhost:8080/v1" } })
-
-    await SettingsStore.update({ providers: { openai: { baseURL: undefined as never } } })
-    SettingsStore.invalidate()
-    // file:// (non-http), a bare non-URL string, and empty string are all rejected so a hand-edited
-    // settings file can never route an official provider somewhere unexpected.
-    const bad = await SettingsStore.update({
-      providers: {
-        openai: { baseURL: "file:///etc/passwd" as never },
-        anthropic: { baseURL: "not a url" as never },
-        google: { baseURL: "" as never },
-      },
-    })
-    expect(bad.settings.providers).toBeUndefined()
-  })
-
-  test("ignores unknown/garbage on read", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { agentMode: "bogus", intelligenceModel: 42 }, providers: { notreal: { x: 1 } } }),
-      { mode: 0o600 },
-    )
-    SettingsStore.invalidate()
-    expect(await SettingsStore.read()).toEqual({})
+  registerSettingsStoreCases((name, run) => {
+    test(name, async () => {
+      if (process.platform !== "win32") {
+        const file = path.join(home, "settings.json")
+        return run({ store: SettingsStore, file, writeFixture: (text) => fs.writeFile(file, text, { mode: 0o600 }) })
+      }
+      const cohort = native.cohort!
+      const root = await fs.mkdtemp(path.join(cohort.root, "settings-case-"))
+      try {
+        const result = await cohort.run({
+          args: [name],
+          env: { DEEPAGENT_CODE_TEST_HOME: root, DEEPAGENT_CODE_HOME: path.join(root, "config") },
+          inheritEnvironment: false,
+          milliseconds: 20_000,
+        })
+        expect(result.timedOut, result.stderrFile).toBe(false)
+        expect(result.code, result.stderr).toBe(0)
+        expect(result.stdout.trim().split(/\r?\n/).at(-1)).toBe(JSON.stringify({ name, native: true }))
+      } finally {
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    }, 30_000)
   })
 })
