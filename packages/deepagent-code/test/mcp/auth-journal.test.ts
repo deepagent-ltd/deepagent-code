@@ -67,7 +67,13 @@ async function collect(directory: string, label: string, process: ReturnType<typ
 test("private journal primitive checks and rollback use actual Bun and Node adapters", async () => {
   const directory = await root()
   const output = path.join(directory, "fixture.mjs")
-  const build = await Bun.build({ entrypoints: [fixture], target: "node", format: "esm", external: ["bun"] })
+  const build = await Bun.build({
+    entrypoints: [fixture],
+    target: "node",
+    format: "esm",
+    conditions: ["node"],
+    external: ["bun"],
+  })
   expect(build.success).toBe(true)
   await fs.writeFile(output, await build.outputs[0].text())
   const bundle = await fs.readFile(output, "utf8")
@@ -127,11 +133,13 @@ test("two real processes acquire one flow and a dispatched exchange survives SIG
     const original = JSON.parse(await fs.readFile(path.join(directory, "dispatched.json"), "utf8"))
     killed.kill("SIGKILL")
     await killed.exited
-    const file = original.file ?? path.join(
-      directory,
-      "private",
-      ...(process.platform === "win32" ? ["mcp-oauth", "journal.sqlite"] : ["auth.sqlite"]),
-    )
+    const file =
+      original.file ??
+      path.join(
+        directory,
+        "private",
+        ...(process.platform === "win32" ? ["mcp-oauth", "journal.sqlite"] : ["auth.sqlite"]),
+      )
     const before = createHash("sha256")
       .update(await fs.readFile(file))
       .digest("hex")
