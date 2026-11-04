@@ -129,6 +129,8 @@ test("actual SDK/native WS and file DB preserve unknown without resend across SD
           senderID: "server", senderType: "user", type: "text", content: "PRIVATE_ORIGINAL_CONTENT_MUST_NOT_BE_LOGGED" })
         stage.value = `send-${selected}`
         yield* lease.engine.send({ groupID, messageID: message.id, content: message.content })
+        if (selected !== "sdk_failure")
+          yield* wait(Effect.sync(() => sent.count === (selected === "ack_false" ? 1 : 2) ? true : undefined))
         const original = yield* wait(lease.engine.deliveryStatus(message.id).pipe(Effect.map((value) => value?.state === "unknown" ? value : undefined)))
         expect(original).toMatchObject({ state: "unknown", kernelMessageID: null, reason: "delivery_outcome_unknown" })
         expect(sent.count).toBe(selected === "sdk_failure" ? 0 : selected === "ack_false" ? 1 : 2)
