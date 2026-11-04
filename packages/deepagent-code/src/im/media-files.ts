@@ -57,12 +57,15 @@ export async function directory(workspaceID: string, create = false, allowMissin
     )
       throw new Error({ code: "unsafe" })
     const entries = [] as { path: string; stat: BigIntStats }[]
-    const checkEntries = async () => {
+    const checkEntries = async (additional: readonly WindowsPrivate.Entry[] = []) => {
       if (process.platform !== "win32") {
         for (const entry of entries) {
           const current = await fs.lstat(entry.path, { bigint: true })
           if (!same(current, entry.stat)) throw new Error({ code: "changed" })
           await privateEntry(entry.path, current, true)
+        }
+        for (const entry of additional) {
+          await privateEntry(entry.file, await fs.lstat(entry.file, { bigint: true }), entry.directory, entry.created)
         }
         return
       }
@@ -72,8 +75,12 @@ export async function directory(workspaceID: string, create = false, allowMissin
         if (!same(stat, entry.stat)) throw new Error({ code: "changed" })
         current.push({ file: entry.path, stat })
       }
-      if (current.length > 0)
-        await windowsPrivateEntries(current.map((entry) => ({ file: entry.file, directory: true, created: false })))
+      for (const entry of additional) await fs.lstat(entry.file, { bigint: true })
+      if (current.length > 0 || additional.length > 0)
+        await windowsPrivateEntries([
+          ...current.map((entry) => ({ file: entry.file, directory: true, created: false })),
+          ...additional,
+        ])
     }
     for (const file of [root, workspace]) {
       const created = create
@@ -113,6 +120,9 @@ export async function directory(workspaceID: string, create = false, allowMissin
               )
                 throw new Error({ code: "changed" })
             }),
+          checkWith: () => {
+            throw new Error({ code: "changed" })
+          },
         }
       if (process.platform === "win32" && entries.length > 0) {
         await windowsPrivateEntries([
@@ -125,14 +135,15 @@ export async function directory(workspaceID: string, create = false, allowMissin
       }
       entries.push({ path: file, stat })
     }
-    const check = () =>
+    const checkWith = (additional?: readonly WindowsPrivate.Entry[]) =>
       attempt(async () => {
         if ((await fs.realpath(Global.Path.data)) !== data || !same(await fs.lstat(data, { bigint: true }), dataStat))
           throw new Error({ code: "changed" })
-        await checkEntries()
+        await checkEntries(additional)
       })
+    const check = () => checkWith()
     if (process.platform !== "win32") await check()
-    return { path: workspace, check, missing: false }
+    return { path: workspace, check, checkWith, missing: false }
   })
 }
 
@@ -162,11 +173,16 @@ export async function open(value: IMAttachment) {
       if (!sameFile(expected, opened)) throw new Error({ code: "changed" })
       const check = () =>
         attempt(async () => {
-          await parent.check()
+          if (process.platform === "win32") {
+            // Preserve every ACL check while sharing one Windows verification process per read.
+            await parent.checkWith([{ file: target, directory: false, created: false }])
+          } else {
+            await parent.check()
+          }
           const current = await fs.lstat(target, { bigint: true })
           if (!sameFile(opened, await file.stat({ bigint: true })) || !sameFile(opened, current))
             throw new Error({ code: "changed" })
-          await privateEntry(target, current, false)
+          if (process.platform !== "win32") await privateEntry(target, current, false)
         })
       await check()
       return { file, check, identity: opened, path: target, parent }

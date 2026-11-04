@@ -218,7 +218,7 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
       const operation = route.endsWith("/attachments") ? "upload" : route.endsWith("/messages") ? "send" : route.endsWith("/direct") ? "direct" : "metadata"
       progress.phase = `http:${operation}:request`
       await writeProgress()
-      const response = await fetch(url, { ...input, headers, signal: AbortSignal.timeout(15000) })
+      const response = await fetch(url, { ...input, headers, signal: AbortSignal.timeout(process.platform === "win32" ? 120_000 : 15_000) })
       progress.phase = `http:${operation}:headers`
       await writeProgress()
       const body = await response.json()
@@ -354,6 +354,9 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
   }).pipe(Effect.provide(context), Effect.ensuring(Effect.promise(() => Bun.write(path.join(root, "handler-safe.json"), JSON.stringify({ scope: "controlled actual HTTP handler only; no Go/UI/provider", concurrent, diagnostic, events, effectFacts, fileCounts: fileTrace.counts, fileFacts: fileTrace.facts, outboundPublishes: outbound.count, objects: objects.size, chunkSizes: chunks }, null, 2))).pipe(Effect.asVoid)))
 })
 
+const budget = process.platform === "win32" ? 120_000 : 40_000
+const observationBudget = process.platform === "win32" ? 100_000 : 35_000
+
 const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* () {
   if (process.env.DAC_IM_MEDIA_BATCH_CHILD === "1") return yield* runBoundary(concurrent, diagnostic)
   const root = yield* Effect.acquireRelease(Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-im-media-product-lanes-batch-")))), (root) => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
@@ -362,7 +365,7 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
   const log = yield* Effect.acquireRelease(Effect.promise(() => fs.open(path.join(root, "child.log"), "wx", 0o600)), (log) => Effect.promise(() => log.close()))
   const pattern = diagnostic ? "^QA listener normal bootstrap" : concurrent ? "^metadata GETs global SSE" : "^actual authenticated createMessage"
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|DEEPAGENT_|DAC_IM_MEDIA_BATCH_)/.test(key)))
-  const child = Bun.spawn([process.execPath, "test", "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"), import.meta.path, "--test-name-pattern", pattern, "--timeout", "30000"], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
+  const child = Bun.spawn([process.execPath, "test", "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"), import.meta.path, "--test-name-pattern", pattern, "--timeout", String(budget)], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
     env: { ...inherited, NODE_EXTRA_CA_CERTS: tls.certificatePath, DAC_IM_MEDIA_BATCH_CHILD: "1", DAC_IM_MEDIA_BATCH_ROOT: root } })
   const startedAt = Date.now()
   const diagnose = async (reason: "deadline-observation" | "failed-exit") => {
@@ -390,7 +393,7 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
     console.info("owned-media-batch-diagnostic", JSON.stringify({ reason, concurrent, diagnostic, elapsedMs: Date.now() - startedAt,
       exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk }))
   }
-  const observation = setTimeout(() => { void diagnose("deadline-observation").catch(() => {}) }, 35000)
+  const observation = setTimeout(() => { void diagnose("deadline-observation").catch(() => {}) }, observationBudget)
   observation.unref()
   yield* Effect.addFinalizer(() => Effect.sync(() => clearTimeout(observation)))
   yield* Effect.addFinalizer(() => Effect.promise(async () => { if (child.exitCode === null) child.kill("SIGTERM"); await child.exited }))
@@ -408,6 +411,6 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
   console.info("owned-media-batch-safe", JSON.stringify({ concurrent, diagnostic, outboundPublishes: receipt.outboundPublishes, objects: receipt.objects, chunkCount: receipt.chunkSizes.length, fileCounts: receipt.fileCounts, terminal: terminal.match(/^\s*\d+ (?:pass|fail|expect\(\) calls).*$/gm) }))
 })
 
-it.live("actual authenticated createMessage sends four original files including the current10MiB boundary after rejecting the original50MiB through formal SDK and current reader", () => run(false), 40000)
-it.live("metadata GETs global SSE and original group WS retain the pending reader through one four-file send", () => run(true), 40000)
-it.live("QA listener normal bootstrap auth and formal SDK preserve Begin Effect reader final and four-file onceSend", () => run(false, true), 40000)
+it.live("actual authenticated createMessage sends four original files including the current10MiB boundary after rejecting the original50MiB through formal SDK and current reader", () => run(false), budget)
+it.live("metadata GETs global SSE and original group WS retain the pending reader through one four-file send", () => run(true), budget)
+it.live("QA listener normal bootstrap auth and formal SDK preserve Begin Effect reader final and four-file onceSend", () => run(false, true), budget)

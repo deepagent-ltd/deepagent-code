@@ -1704,7 +1704,8 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                 Effect.ensuring(
                   Effect.sync(() => {
                     // Early multipart exits can leave unread bytes. Drain rather than reset keep-alive peers.
-                    NodeHttpServerRequest.toIncomingMessage(request).resume()
+                    const incoming = NodeHttpServerRequest.toIncomingMessage(request)
+                    if (typeof incoming.resume === "function") incoming.resume()
                   }),
                 ),
               ),
