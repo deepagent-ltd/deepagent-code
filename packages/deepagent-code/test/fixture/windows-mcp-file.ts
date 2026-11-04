@@ -3,17 +3,18 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { WindowsNativeCliCohort } from "./windows-native-cli-cohort"
 
-export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
+export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect" | "oauth-browser") {
   const repository = path.resolve(import.meta.dir, "../../../..")
   const shim = path.join(import.meta.dir, "compiled-test-registry.ts")
   const registrations = new Set([
     path.join(import.meta.dir, "../mcp/auth-scope.cases.ts"),
     path.join(import.meta.dir, "../mcp/oauth-auto-connect.cases.ts"),
+    path.join(import.meta.dir, "../mcp/oauth-browser.cases.ts"),
     path.join(import.meta.dir, "../lib/effect.ts"),
     path.join(import.meta.dir, "fixture.ts"),
   ].map((filename) => path.resolve(filename)))
   const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
-  const expected = file === "auth-scope" ? 27 : 8
+  const expected = file === "auth-scope" ? 27 : file === "oauth-auto-connect" ? 8 : 3
   beforeAll(async () => {
     const directory = path.join(process.env.RUNNER_TEMP ?? path.join(repository, ".artifacts"), "windows-native-mcp")
     await fs.mkdir(directory, { recursive: true })
@@ -25,6 +26,8 @@ export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
         path.join(import.meta.dir, "../lib/seed-ripgrep.ts"), path.join(import.meta.dir, "../tool/fixtures/models-api.json"),
         path.join(import.meta.dir, "../mcp/auth-scope.cases.ts"),
         path.join(import.meta.dir, "../mcp/oauth-auto-connect.cases.ts"),
+        path.join(import.meta.dir, "../mcp/oauth-browser.cases.ts"),
+        path.join(import.meta.dir, "windows-oauth-browser.ts"),
         path.join(import.meta.dir, "../lib/effect.ts"), path.join(import.meta.dir, "fixture.ts")],
       plugins: [{
         name: "original-mcp-case-registration",
@@ -39,7 +42,18 @@ export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
             return { contents: source.replace(/from (["'])bun:test\1/g, `from ${JSON.stringify(shim)}`), loader: "ts" }
           })
         },
-      }],
+      }, ...(file === "oauth-browser" ? [{
+        name: "owned-oauth-browser-opening",
+        setup(builder: Parameters<NonNullable<Bun.BuildConfig["plugins"]>[number]["setup"]>[0]) {
+          builder.onLoad({ filter: /[/\\]src[/\\]mcp[/\\]index\.ts$/ }, async (input) => {
+            const source = await fs.readFile(input.path, "utf8")
+            const from = 'import open from "open"'
+            if (source.split(from).length !== 2) throw new Error("Original MCP browser import changed")
+            const fixture = path.join(import.meta.dir, "windows-oauth-browser.ts")
+            return { contents: source.replace(from, `import open from ${JSON.stringify(fixture)}`), loader: "ts" }
+          })
+        },
+      }] : [])],
     })
   }, 240_000)
   afterAll(async () => { await state.cohort?.dispose() })

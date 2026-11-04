@@ -123,7 +123,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
 
   cliIt.concurrent(
     "packs list shows the active set with a snapshot id",
-    ({ deepagentCode }) =>
+    ({ home, deepagentCode }) =>
       Effect.gen(function* () {
         const json = yield* deepagentCode.spawn(["packs", "list", "--format", "json"])
         deepagentCode.expectExit(json, 0, "packs list --format json")
@@ -138,6 +138,11 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         deepagentCode.expectExit(all, 0, "packs list --all --format json")
         const catalog = deepagentCode.expectJsonStdout(all, "packs list --all --format json") as {
           packs: Array<{ id: string; builtin: boolean }>
+        }
+        if (catalog.packs.length === 0) {
+          const log = yield* Effect.tryPromise(() => Bun.file(path.join(home, ".deepagent/code/log/dev.log")).text())
+            .pipe(Effect.orElseSucceed(() => ""))
+          console.error("CLI_PACKS_DISCOVERY", log.split("\n").filter((line) => line.includes("packsAll")).join("\n"))
         }
         expect(catalog.packs.length).toBeGreaterThan(0)
       }),

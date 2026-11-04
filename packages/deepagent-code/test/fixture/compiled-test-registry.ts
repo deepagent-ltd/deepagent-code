@@ -1,9 +1,12 @@
-export { expect } from "bun:test"
+export { expect, mock } from "bun:test"
 
 type Body = () => unknown | Promise<unknown>
 type Options = number | { timeout?: number }
 const cases: { name: string; body: Body; milliseconds: number }[] = []
 const finalizers: { body: Body; milliseconds: number }[] = []
+const preparations: Body[] = []
+const afterEachBodies: Body[] = []
+const setups: Body[] = []
 const state = { running: false }
 
 // This is only test scheduling. Assertions are Bun's actual expect, and the
@@ -25,6 +28,21 @@ export function afterAll(body: Body, milliseconds = 30_000) {
   if (state.running || !Number.isSafeInteger(milliseconds) || milliseconds < 1 || milliseconds > 30_000)
     throw new Error("Compiled test finalizer registration is invalid")
   finalizers.push({ body, milliseconds })
+}
+
+export function beforeAll(body: Body) {
+  if (state.running) throw new Error("Compiled test setup registration is invalid")
+  setups.push(body)
+}
+
+export function beforeEach(body: Body) {
+  if (state.running) throw new Error("Compiled test preparation registration is invalid")
+  preparations.push(body)
+}
+
+export function afterEach(body: Body) {
+  if (state.running) throw new Error("Compiled test cleanup registration is invalid")
+  afterEachBodies.push(body)
 }
 
 async function bounded(body: Body, milliseconds: number) {
@@ -50,21 +68,35 @@ async function bounded(body: Body, milliseconds: number) {
 }
 
 export async function runCompiledTests(expected: number) {
-  if (state.running || cases.length !== expected || new Set(cases.map((entry) => entry.name)).size !== expected)
+  const pattern = process.env.DAC_COMPILED_TEST_NAME_PATTERN
+  const selected = pattern ? cases.filter((entry) => new RegExp(pattern).test(entry.name)) : cases
+  if (state.running || selected.length !== expected || new Set(selected.map((entry) => entry.name)).size !== expected)
     throw new Error("Original compiled case inventory does not match")
   state.running = true
+  const startup = await bounded(async () => {
+    for (const setup of setups) await setup()
+  }, 30_000)
   const rows: { name: string; milliseconds: number; ok: boolean; timedOut: boolean; error?: string }[] = []
-  for (const entry of cases) {
-    const started = performance.now()
-    const result = await bounded(entry.body, entry.milliseconds)
-    rows.push({ name: entry.name, milliseconds: performance.now() - started, ...result })
-    console.info("WINDOWS_MCP_ORIGINAL_CASE", JSON.stringify(rows.at(-1)))
-    // The original Native parent retires and joins this process tree. Do not
-    // execute another body while a timed-out body might still own its scope.
-    if (result.timedOut) break
+  if (startup.ok) {
+    for (const entry of selected) {
+      const started = performance.now()
+      const result = await bounded(async () => {
+        try {
+          for (const prepare of preparations) await prepare()
+          return await entry.body()
+        } finally {
+          for (const cleanup of afterEachBodies) await cleanup()
+        }
+      }, entry.milliseconds)
+      rows.push({ name: entry.name, milliseconds: performance.now() - started, ...result })
+      console.info("WINDOWS_MCP_ORIGINAL_CASE", JSON.stringify(rows.at(-1)))
+      // The original Native parent retires and joins this process tree. Do not
+      // execute another body while a timed-out body might still own its scope.
+      if (result.timedOut) break
+    }
   }
   const cleanup: Awaited<ReturnType<typeof bounded>>[] = []
   for (const entry of finalizers.toReversed()) cleanup.push(await bounded(entry.body, entry.milliseconds))
-  return { expected, registered: cases.length, executed: rows.length, rows, cleanup,
-    pass: rows.length === expected && rows.every((row) => row.ok) && cleanup.every((row) => row.ok) }
+  return { expected, registered: selected.length, executed: rows.length, rows, startup, cleanup,
+    pass: startup.ok && rows.length === expected && rows.every((row) => row.ok) && cleanup.every((row) => row.ok) }
 }

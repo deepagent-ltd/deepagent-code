@@ -33,9 +33,10 @@ const rootFiles = [
 export async function prepare() {
   const repository = path.resolve(import.meta.dir, "../../../../..")
   const temporary = process.platform === "win32"
-    ? path.join(repository, "packages/deepagent-code/.artifacts/windows-native-node-development") : os.tmpdir()
-  if (process.platform === "win32" && path.win32.parse(temporary).root.toUpperCase() !== "D:\\")
-    throw new Error("Windows development builds must stay on D:")
+    ? [path.join(repository, "packages/deepagent-code/.artifacts/windows-native-node-development"), process.env.RUNNER_TEMP, os.tmpdir()]
+      .find((directory) => directory && path.win32.parse(directory).root.toUpperCase() === "D:\\")
+    : os.tmpdir()
+  if (!temporary) throw new Error("Windows development builds must stay on D:")
   await fs.mkdir(temporary, { recursive: true })
   const root = await fs.realpath(await fs.mkdtemp(path.join(temporary, "dac-native-node-development-")))
   await fs.chmod(root, 0o700)

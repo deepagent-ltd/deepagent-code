@@ -5,14 +5,16 @@ import path from "node:path"
 
 test("history CLI uses the durable private file job and exact retry without reopening the original source", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-import-history-cli-")))
-  await Promise.all(["home", "tmp", "config", "data", "cache", "state", "project"].map(name =>
+  await Promise.all(["home", "tmp", "config", "data", "cache", "state", "project", "appdata", "localappdata"].map(name =>
     fs.mkdir(path.join(root, name))))
   const source = path.join(root, "claude")
   await Bun.write(path.join(source, "skills", "fixture", "SKILL.md"), "# Fixture\nUse the packaged asset.\n")
   await Bun.write(path.join(source, "skills", "fixture", "assets", "bytes.bin"), new Uint8Array([0, 128, 255]))
   const env = {
     PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-    HOME: path.join(root, "home"), TMPDIR: path.join(root, "tmp"), TMP: path.join(root, "tmp"), TEMP: path.join(root, "tmp"),
+    HOME: path.join(root, "home"), USERPROFILE: path.join(root, "home"),
+    APPDATA: path.join(root, "appdata"), LOCALAPPDATA: path.join(root, "localappdata"),
+    TMPDIR: path.join(root, "tmp"), TMP: path.join(root, "tmp"), TEMP: path.join(root, "tmp"),
     XDG_CONFIG_HOME: path.join(root, "config"), XDG_DATA_HOME: path.join(root, "data"),
     XDG_CACHE_HOME: path.join(root, "cache"), XDG_STATE_HOME: path.join(root, "state"),
     DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"), DEEPAGENT_CODE_HOME: path.join(root, "data"),
@@ -22,7 +24,9 @@ test("history CLI uses the durable private file job and exact retry without reop
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", NO_COLOR: "1",
   }
   const run = async (label: string, ...options: string[]) => {
-    const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../src/index.ts"), "import-history",
+    const child = Bun.spawn([process.execPath,
+      ...(process.platform === "win32" ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")] : []),
+      path.resolve(import.meta.dir, "../../src/index.ts"), "import-history",
       "--from", "claude", "--path", source, "--scope", "skill", "--request-id", "cli-files", ...options], {
       cwd: path.join(root, "project"), env, stdout: "pipe", stderr: "pipe",
     })

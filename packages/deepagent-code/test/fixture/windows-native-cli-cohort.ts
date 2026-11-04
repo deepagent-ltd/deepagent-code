@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, sign } from "node:crypto"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { Schema } from "effect"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { NativeInstallationSchema } from "../../src/installation/native-installation.schema"
@@ -129,7 +129,16 @@ export async function build(input: {
 }
 `, loader: "ts" }
         })
-      } }, ...(input.plugins ?? [])],
+      } }, {
+        name: "owned-native-cli-pack-resources",
+        setup(builder) {
+          // Bun's virtual $bunfs URL cannot resolve the real pack corpus in the source checkout.
+          builder.onLoad({ filter: /[/\\]packages[/\\]core[/\\]src[/\\]deepagent[/\\](?:domain-pack-registry|knowledge-seed)\.ts$/ }, async (input) => ({
+            contents: (await Bun.file(input.path).text()).replaceAll("import.meta.url", JSON.stringify(pathToFileURL(input.path).href)),
+            loader: "ts",
+          }))
+        },
+      }, ...(input.plugins ?? [])],
     })
     assert(compiled.success, compiled.logs.map((item) => item.message).join("\n"))
     await fs.writeFile(`${executable}.native-components.json`, text, { flag: "wx" })

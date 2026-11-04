@@ -9,7 +9,8 @@ import { NativeWindowsBootstrap } from "../../../src/installation/windows-native
 // entry imports production code. Do not run the source preload, which repoints
 // those homes after the original Native capture has already been installed.
 const file = process.argv.at(-1)
-if (file !== "auth-scope" && file !== "oauth-auto-connect") throw new Error("Unknown original MCP case file")
+if (file !== "auth-scope" && file !== "oauth-auto-connect" && file !== "oauth-browser")
+  throw new Error("Unknown original MCP case file")
 const root = process.env.DAC_WINDOWS_MCP_ROOT
 if (!root) throw new Error("Owned MCP result root is absent")
 // Keep one original owner for the file. Each case still closes its own Root
@@ -28,7 +29,8 @@ const prepared = await (async () => {
     initProjectors()
     if (file === "auth-scope") await import("../auth-scope.cases")
     if (file === "oauth-auto-connect") await import("../oauth-auto-connect.cases")
-    const result = await runCompiledTests(file === "auth-scope" ? 27 : 8)
+    if (file === "oauth-browser") await import("../oauth-browser.cases")
+    const result = await runCompiledTests(file === "auth-scope" ? 27 : file === "oauth-auto-connect" ? 8 : 3)
     const currentBeforeRetirement = Exit.isSuccess(await Effect.runPromiseExit(bootstrap.requireCurrent))
     return { bootstrap, result, currentBeforeRetirement }
   } finally {
