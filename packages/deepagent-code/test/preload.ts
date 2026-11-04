@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { afterAll } from "bun:test"
 
 // Set XDG env vars FIRST, before any src/ imports
+process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS = "1"
 const scratch = path.join(os.tmpdir(), "deepagent-code-test-data-" + process.pid)
 await fs.mkdir(scratch, { recursive: true })
 // macOS exposes /var through an alias. Fixtures use the actual private root,

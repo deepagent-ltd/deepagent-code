@@ -32,7 +32,7 @@ export const read = (file: string) =>
   })
 
 export const readEffect = (file: string) => Effect.suspend(() => {
-  if (process.platform !== "win32") return Effect.tryPromise({ try: () => read(file), catch: safeError })
+  if (process.platform !== "win32" || sourceTestSettings()) return Effect.tryPromise({ try: () => read(file), catch: safeError })
   return Effect.gen(function* () {
     const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
     const storage = yield* WindowsSettingsStorage.Current
@@ -43,7 +43,7 @@ export const readEffect = (file: string) => Effect.suspend(() => {
 })
 
 export const parentEffect = (file: string) => Effect.suspend(() => {
-  if (process.platform !== "win32") return Effect.tryPromise({ try: () => parent(file), catch: safeError })
+  if (process.platform !== "win32" || sourceTestSettings()) return Effect.tryPromise({ try: () => parent(file), catch: safeError })
   return Effect.gen(function* () {
     const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
     const storage = yield* WindowsSettingsStorage.Current
@@ -51,6 +51,12 @@ export const parentEffect = (file: string) => Effect.suspend(() => {
     yield* storage.parent.pipe(Effect.mapError(safeError))
   })
 })
+
+/** Source test runs have no compiled Native bootstrap, so they observe the same filesystem
+ * contract as POSIX. Production never sets this flag and always uses the Native port. */
+function sourceTestSettings() {
+  return process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS === "1"
+}
 
 async function readEntry(file: string) {
   const parent = await fs.lstat(path.dirname(file)).catch((error: unknown) => {

@@ -133,6 +133,14 @@ export const readGoalPlanFile = (cwd: string, sessionID: string): ParsedGoalPlan
       )
         return null
       const content = bytes.subarray(0, offset)
+      // NTFS can serve a stale fstat for an open handle after an external same-size rewrite, so
+      // verify the exact observed bytes through a fresh descriptor before accepting the plan.
+      const verified = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+      try {
+        if (!fs.readFileSync(verified).equals(content)) return null
+      } finally {
+        fs.closeSync(verified)
+      }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(content)
       if (!Buffer.from(text).equals(content)) return null
       return parseGoalPlanFile(sessionID, text)

@@ -209,8 +209,10 @@ export const requireSettledEffect = Effect.gen(function* () {
         matches(current.operation, settings?.hash ?? null, config?.stamp?.digest)
       )
     }).pipe(
+      // An unregistered private port cannot observe journals; the enclosed read reports its own
+      // unavailable error. Retrying here would turn that concrete failure into a timeout.
       Effect.catch((error: ConfigFileWrite.Error | Error) =>
-        error.reason === "unavailable" ? Effect.succeed(false) : Effect.fail(error),
+        error.reason === "unavailable" ? Effect.succeed(true) : Effect.fail(error),
       ),
     )
     if (settled) return

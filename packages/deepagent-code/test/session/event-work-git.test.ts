@@ -6,7 +6,9 @@ import { spawnSync } from "node:child_process"
 import { Effect } from "effect"
 import { EventWorkGit } from "../../src/session/event-work-git"
 
-test("formal raw Git does not execute hooks or filters and refuses external merge variants", async () => {
+// POSIX raw Git is what this test observes. On Windows the same custody path is the compiled
+// Native EventWorkGit port, exercised by event-work-repository.test.ts through its cohort.
+test.skipIf(process.platform === "win32")("formal raw Git does not execute hooks or filters and refuses external merge variants", async () => {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-event-git-")))
   const directory = path.join(base, "project")
   await fs.mkdir(directory)

@@ -7,7 +7,9 @@ import { Effect } from "effect"
 import { EventWorkGit } from "../../src/session/event-work-git"
 import { EventWorkArtifacts } from "../../src/session/event-work-artifacts"
 
-test("dirty ordinary output becomes one immutable baseline through a private index without parent writes", async () => {
+// The POSIX private-index baseline. Windows runs the same custody operations through the
+// compiled Native EventWorkGit port, covered by the Windows repository cohort tests.
+test.skipIf(process.platform === "win32")("dirty ordinary output becomes one immutable baseline through a private index without parent writes", async () => {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-event-baseline-")))
   const prepare = (args: string[]) => {
     const value = spawnSync("git", args, { cwd: directory, encoding: "utf8", timeout: 10_000 })
