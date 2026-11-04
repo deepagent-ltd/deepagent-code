@@ -5868,10 +5868,17 @@ describe("SessionRunnerLLM", () => {
           resume: false,
         })
 
-        const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: localhostCompletion })
+        const reservation = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: async () => {
+            // Close after accepting a request but before response headers, preserving an unknown dispatch outcome.
+            await reservation.stop(true)
+            return new Promise<Response>(() => {})
+          },
+        })
         const port = reservation.port
         yield* Effect.addFinalizer(() => Effect.promise(() => reservation.stop(true)))
-        yield* Effect.promise(() => reservation.stop(true))
         useLocalhostModel(`http://127.0.0.1:${port}/v1`, "fixture-local-connect-retry")
         requests.length = 0
         responseStreams = [localhostProviderStream()]
