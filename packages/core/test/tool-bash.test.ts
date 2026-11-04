@@ -221,7 +221,9 @@ describe("BashTool", () => {
           ).pipe(Effect.forkChild)
           yield* Effect.promise(async () => {
             const deadline = Date.now() + 5000
-            while (!await Bun.file(path.join(tmp.path, "marker.txt")).exists()) {
+            // The redirection creates the file before printf writes it; wait for the content so a
+            // loaded runner cannot interrupt the shell between creation and the actual write.
+            while (await Bun.file(path.join(tmp.path, "marker.txt")).text().catch(() => "") !== "started") {
               if (Date.now() >= deadline) throw new Error("Original shell did not start")
               await Bun.sleep(10)
             }
