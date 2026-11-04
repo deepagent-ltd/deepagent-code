@@ -124,7 +124,14 @@ it.live("original listener and QA composition cold roots complete one formal SDK
     const client = createDeepAgentCodeClient({ baseUrl: url, directory, headers: { authorization: auth } })
     const denied = yield* Effect.promise(() => fetch(url + "/api/v1/im/status?directory=" + encodeURIComponent(directory)))
     expect(denied.status).toBe(401)
-    const status = yield* Effect.promise(() => client.im.facade.status({ directory }, { throwOnError: true }))
+    const status = yield* pollWithTimeout(
+      Effect.promise(() => client.im.facade.status({ directory }, { throwOnError: true })).pipe(
+        Effect.map((result) => result.data?.reader?.state === "ready" && result.data.kernel === "connected" ? result : undefined),
+        Effect.catch(() => Effect.succeed(undefined)),
+      ),
+      "Native reader did not become ready",
+      "20 seconds",
+    )
     expect(status.data?.facade).toBe("active")
     const direct = yield* Effect.promise(() => client.im.facade.direct({ directory, name: "Sender" }, { throwOnError: true }))
     expect(direct.data?.reader?.state).toBe("pending")
