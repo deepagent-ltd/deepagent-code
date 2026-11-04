@@ -32,23 +32,25 @@ export const read = (file: string) =>
   })
 
 export const readEffect = (file: string) => Effect.suspend(() => {
-  if (process.platform !== "win32" || sourceTestSettings()) return Effect.tryPromise({ try: () => read(file), catch: safeError })
+  if (process.platform !== "win32") return Effect.tryPromise({ try: () => read(file), catch: safeError })
   return Effect.gen(function* () {
     const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
     const storage = yield* WindowsSettingsStorage.Current
     const fixed = name(file)
-    if (!storage || !fixed) return yield* Effect.fail(new Error("unavailable"))
-    return yield* storage.read(fixed).pipe(Effect.mapError(safeError))
+    if (storage && fixed) return yield* storage.read(fixed).pipe(Effect.mapError(safeError))
+    if (sourceTestSettings()) return yield* Effect.tryPromise({ try: () => read(file), catch: safeError })
+    return yield* Effect.fail(new Error("unavailable"))
   })
 })
 
 export const parentEffect = (file: string) => Effect.suspend(() => {
-  if (process.platform !== "win32" || sourceTestSettings()) return Effect.tryPromise({ try: () => parent(file), catch: safeError })
+  if (process.platform !== "win32") return Effect.tryPromise({ try: () => parent(file), catch: safeError })
   return Effect.gen(function* () {
     const { WindowsSettingsStorage } = yield* Effect.promise(() => import("../installation/windows-settings-storage"))
     const storage = yield* WindowsSettingsStorage.Current
-    if (!storage || !name(file)) return yield* Effect.fail(new Error("unavailable"))
-    yield* storage.parent.pipe(Effect.mapError(safeError))
+    if (storage && name(file)) return yield* storage.parent.pipe(Effect.mapError(safeError))
+    if (sourceTestSettings()) return yield* Effect.tryPromise({ try: () => parent(file), catch: safeError })
+    return yield* Effect.fail(new Error("unavailable"))
   })
 })
 
