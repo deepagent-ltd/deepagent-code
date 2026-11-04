@@ -40,7 +40,9 @@ describe("deepagentCode run (non-interactive timeout exit)", () => {
         expect(result.termination).toBe("exited")
         expect(result.exitCode).not.toBe(0)
         expect(`${result.stdout}\n${result.stderr}`).toContain("Timed out")
-        expect(result.durationMs).toBeLessThan(25_000)
+        // The harness kills a still-hung process at 30 s; a self-exit must beat that bound on a
+        // loaded runner even though its cold start adds time outside the provider deadline.
+        expect(result.durationMs).toBeLessThan(30_000)
       }),
     45_000,
   )
