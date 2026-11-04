@@ -15,7 +15,7 @@ export function windowsMcpFile(file: "auth-scope" | "oauth-auto-connect") {
   const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
   const expected = file === "auth-scope" ? 27 : 8
   beforeAll(async () => {
-    const directory = path.join(repository, ".artifacts", "windows-native-mcp")
+    const directory = path.join(process.env.RUNNER_TEMP ?? path.join(repository, ".artifacts"), "windows-native-mcp")
     await fs.mkdir(directory, { recursive: true })
     state.cohort = await WindowsNativeCliCohort.build({ directory: await fs.realpath(directory),
       businessEntry: path.join(import.meta.dir, "../mcp/fixture/windows-compiled-mcp-host.ts"),
