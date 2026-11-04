@@ -16,7 +16,7 @@ const probe = (action: string): Promise<unknown> =>
     const timer = setTimeout(() => {
       worker.removeEventListener("message", handle)
       reject(new Error("Fixture probe timeout"))
-    }, 20000)
+    }, 60000)
     function handle(event: MessageEvent<unknown>) {
       const value = event.data
       if (!value || typeof value !== "object" || !("probeResult" in value) || !("id" in value) || value.id !== id)

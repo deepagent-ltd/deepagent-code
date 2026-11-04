@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, setDefaultTimeout, test } from "bun:test"
 import path from "node:path"
 import { eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
@@ -31,6 +31,9 @@ import { createPlanDoc } from "../src/deepagent/plan-controller"
 import { Hash } from "../src/util/hash"
 import { services, temporary, seedSession, seedActivity } from "./fixture/attention"
 import { testEffect } from "./lib/effect"
+
+// Hosted Windows cold starts and real native custody exceed the default per-test budget.
+setDefaultTimeout(60_000)
 
 const it = testEffect(Layer.empty)
 const admit = (db: Database.Interface["db"], parent: SessionSchema.ID, key: string) =>
@@ -250,7 +253,7 @@ describe("Task/Goal attention original-source read model", () => {
         expect(state).toMatchObject({ locations: 0, runs: 0, shells: 0 })
       }),
     )
-  }, 20000)
+  }, 60_000)
   it.live(
     "advertises fresh ordinary controls only from the current host read gate and the original custody frontier",
     () =>
