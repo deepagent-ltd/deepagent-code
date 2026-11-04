@@ -499,7 +499,7 @@ shutdownTest("cancelled same-projection consumers share only their still-pending
 shutdownTest("one pending foreground native cut cannot starve an advisory header from the free slot", () => {
   const foreground = { settled: false }
   return nativeShutdownFixture({
-    queryDelayMs: (topic) => topic === "qry_delivery_read_cut" ? 9000 : 0,
+    queryDelayMs: (topic) => topic === "qry_delivery_read_cut" ? 6500 : 0,
     response: (topic, request, original) => topic === "qry_delivery_read_cut"
       ? { name: "DeliveryReadCutResult", value: { ...request, throughOrdinal: "0", targetAdmittedOrdinal: "0",
           readOrdinal: "0", liveUnread: "0", storedUnread: "0", serverNow: Date.now(), complete: true } }

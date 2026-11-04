@@ -85,20 +85,27 @@ async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "co
       signHttp(undefined, input, () => true) }, true) as Pick<ReturnType<typeof JuggleIM.init>,
     "getProtectedMediaCapabilities" | "getProtectedMediaTransferCapabilities" | "getProtectedMediaUploadProgress" | "beginProtectedMedia" |
     "putProtectedMediaChunk" | "finalizeProtectedMedia" | "getProtectedMedia" | "cancelProtectedMedia" | "readProtectedMediaRange">
+  // Bound each actual SDK request, not the platform-specific file and ACL verification around it.
+  const request: typeof KernelSdk.request = (operation, run) => KernelSdk.request(operation, run).pipe(
+    Effect.timeoutOrElse({
+      duration: "2 seconds",
+      orElse: () => Effect.fail(new KernelSdk.KernelError({ operation, message: "SDK request timed out" })),
+    }),
+  )
   const media: KernelSdk.Media = {
-    capabilities: () => KernelSdk.request("media_capabilities", () => native.getProtectedMediaCapabilities()),
-    transferCapabilities: () => KernelSdk.request("media_transfer_capabilities", () => native.getProtectedMediaTransferCapabilities()),
-    uploadProgress: input => KernelSdk.request("media_upload_progress", () => native.getProtectedMediaUploadProgress(input)),
-    begin: input => KernelSdk.request("media_begin", () => native.beginProtectedMedia(input)),
-    putChunk: input => KernelSdk.request("media_chunk", () => native.putProtectedMediaChunk(input)),
-    finalize: input => KernelSdk.request("media_finalize", () => native.finalizeProtectedMedia(input)),
-    status: input => KernelSdk.request("media_status", () => native.getProtectedMedia(input)),
-    cancel: input => KernelSdk.request("media_cancel", () => native.cancelProtectedMedia(input)),
-    readRange: input => KernelSdk.request("media_range", () => native.readProtectedMediaRange(input)),
+    capabilities: () => request("media_capabilities", () => native.getProtectedMediaCapabilities()),
+    transferCapabilities: () => request("media_transfer_capabilities", () => native.getProtectedMediaTransferCapabilities()),
+    uploadProgress: input => request("media_upload_progress", () => native.getProtectedMediaUploadProgress(input)),
+    begin: input => request("media_begin", () => native.beginProtectedMedia(input)),
+    putChunk: input => request("media_chunk", () => native.putProtectedMediaChunk(input)),
+    finalize: input => request("media_finalize", () => native.finalizeProtectedMedia(input)),
+    status: input => request("media_status", () => native.getProtectedMedia(input)),
+    cancel: input => request("media_cancel", () => native.cancelProtectedMedia(input)),
+    readRange: input => request("media_range", () => native.readProtectedMediaRange(input)),
   }
   return { local, metadata, wire, puts, uploadIDs, run: () => Effect.runPromiseExit(IMKernelMediaUpload.upload(media, local, {
     source: { server: "private-http" }, messageID: "original-private-message", conversationType: 1, conversationID: "private-peer",
-  }).pipe(Effect.timeout("2 seconds"))), [Symbol.asyncDispose]: async () => { server.stop(true); await fs.rm(parent.path, { recursive: true, force: true }) } }
+  })), [Symbol.asyncDispose]: async () => { server.stop(true); await fs.rm(parent.path, { recursive: true, force: true }) } }
 }
 
 test("original uploader resumes an authenticated sparse checkpoint using only missing bytes and one progress GET", async () => {

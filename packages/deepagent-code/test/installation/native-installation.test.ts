@@ -293,7 +293,18 @@ async function windowsHeld(binary: string, kind: string) {
       expect(hash(await fs.readFile(filename))).not.toBe(before.hash)
     }
     if (kind !== "changed-bytes") {
-      await fs.rename(replacement, filename)
+      // The launcher can exit before its Native sidecar releases the executable image lease.
+      const deadline = Date.now() + 5000
+      for (;;) {
+        try {
+          await fs.rename(replacement, filename)
+          break
+        } catch (error) {
+          const code = error && typeof error === "object" && "code" in error ? String(error.code) : undefined
+          if (!["EACCES", "EPERM", "EBUSY"].includes(code ?? "") || Date.now() >= deadline) throw error
+          await Bun.sleep(20)
+        }
+      }
       expect(hash(await fs.readFile(filename))).toBe(before.hash)
     }
   } finally {
