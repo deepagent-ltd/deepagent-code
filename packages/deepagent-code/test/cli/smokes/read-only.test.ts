@@ -108,7 +108,7 @@ describe("deepagentCode read-only commands (smoke)", () => {
       Effect.gen(function* () {
         const r = yield* deepagentCode.spawn(["db", "path"])
         deepagentCode.expectExit(r, 0, "db path")
-        expect(r.stdout.trim()).toMatch(/^(:memory:|[/\\].+\.(db|sqlite|sqlite3))$/i)
+        expect(r.stdout.trim()).toMatch(/^(:memory:|(?:[A-Za-z]:)?[/\\].+\.(db|sqlite|sqlite3))$/i)
       }),
     60_000,
   )

@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 test("original validation Host reserves before filesystem await and retires only actual original watchers", async () => {
-  const root = await fs.realpath(await fs.mkdtemp("/tmp/dac-ri94-validation-watchers-"))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-ri94-validation-watchers-")))
   try {
     const build = await Bun.build({ entrypoints: [path.join(import.meta.dir, "fixture/ri94-validation-watchers.ts")],
       target: "bun", outdir: path.join(root, "install"), plugins: [{ name: "readonly-original-owner-observer", setup(builder) {
-        builder.onLoad({ filter: /src\/deepagent\/event-validation\.ts$/ }, async (input) => {
+        builder.onLoad({ filter: /src[\\/]deepagent[\\/]event-validation\.ts$/ }, async (input) => {
           const source = await fs.readFile(input.path, "utf8")
           // Test-private observation/delay hooks; real lstat/realpath/watch/close/finalizers remain.
           return { loader: "ts", contents: source.replace('try: async () => ({ stat: await fs.lstat(directory), real: await fs.realpath(directory) })',

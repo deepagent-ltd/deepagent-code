@@ -3,7 +3,9 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
-test("actual default TUI worker RPC cannot authorize OAuth using an empty-password HTTP context", async () => {
+// The MCP OAuth journal is a compiled Native custody port on Windows; source runs cannot open
+// it. Windows custody is exercised by the compiled auth-scope/oauth-auto-connect cohorts.
+test.skipIf(process.platform === "win32")("actual default TUI worker RPC cannot authorize OAuth using an empty-password HTTP context", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-tui-rpc-")))
   await Promise.all(["home", "tmp", "project"].map((name) => fs.mkdir(path.join(root, name))))
   const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../fixture/mcp-tui-rpc.ts")], {

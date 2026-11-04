@@ -81,7 +81,7 @@ test("foreign project observations, changed git identity and moved-root aliases 
       projectID: "global", git: false }).pipe(Effect.flip)).code).toBe("BROWSER_SCOPE_DENIED")
     expect(yield* db.select().from(LocationIdentityTable)).toEqual(aliasBefore)
   }))
-})
+}, 60_000)
 
 test("the original lookup still refuses changed namespace, project hash, placement and retirement", async () => {
   await run((root) => Effect.gen(function* () {

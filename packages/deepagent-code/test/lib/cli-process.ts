@@ -319,6 +319,9 @@ export function withCliFixture<A, E>(
     // location in the child.
     yield* Effect.promise(() => Bun.write(path.join(home, ".deepagent", "code", "config.jsonc"), configJson))
     const env = isolatedEnv(home, configJson)
+    // Source CLI children have no compiled Native bootstrap; keep their settings on the same
+    // filesystem protocol the test process uses. Cohorts keep the original Native custody.
+    if (!native.cohort) env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS = "1"
     if (native.cohort) Object.assign(env, {
       USERPROFILE: home, APPDATA: path.join(home, "appdata"), LOCALAPPDATA: path.join(home, "localappdata"),
       TEMP: path.join(home, "tmp"), TMP: path.join(home, "tmp"), TMPDIR: path.join(home, "tmp"),

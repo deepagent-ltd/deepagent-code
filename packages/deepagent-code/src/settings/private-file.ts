@@ -53,9 +53,11 @@ export const parentEffect = (file: string) => Effect.suspend(() => {
 })
 
 /** Source test runs have no compiled Native bootstrap, so they observe the same filesystem
- * contract as POSIX. Production never sets this flag and always uses the Native port. */
+ * contract as POSIX. Every isolated test child already carries DEEPAGENT_CODE_TEST_HOME;
+ * production never sets either signal and always uses the Native port. */
 function sourceTestSettings() {
-  return process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS === "1"
+  return process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS === "1" ||
+    Boolean(process.env.DEEPAGENT_CODE_TEST_HOME)
 }
 
 async function readEntry(file: string) {
