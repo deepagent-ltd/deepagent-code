@@ -28,6 +28,10 @@ import type { Codec } from "../../src/mcp/dpapi"
 import { WindowsPrivateStorage } from "../../src/installation/windows-private-storage"
 import { windowsMcpStorage } from "../fixture/windows-mcp-storage"
 
+// The compiled Native registry caps every original case at 30 s; the ordinary runner allows a
+// longer budget for the fresh private layer on loaded macOS CI hosts.
+const slowCaseBudget = process.env.DAC_WINDOWS_MCP_ROOT ? 30_000 : 90_000
+
 const it = testEffect(
   Layer.mergeAll(
     MCP.defaultLayer,
@@ -82,7 +86,7 @@ it.instance(
   { config: { mcp: {} } },
   // A fresh private layer and database on a loaded macOS CI runner can exceed the 30 s global
   // default; the flow assertions themselves stay unchanged.
-  90_000,
+  slowCaseBudget,
 )
 
 it.instance(

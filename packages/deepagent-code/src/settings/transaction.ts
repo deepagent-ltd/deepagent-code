@@ -216,7 +216,7 @@ export const requireSettledEffect = Effect.gen(function* () {
     if (settled) return
     yield* Effect.sleep("5 millis")
   }
-}).pipe(Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.fail(new Error("unknown")) }))
+}).pipe(Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("unknown")) }))
 
 export async function requireSettled() {
   const exit = await Effect.runPromiseExit(requireSettledEffect)
