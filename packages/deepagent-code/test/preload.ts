@@ -143,3 +143,7 @@ initProjectors()
 const { ownerDevKeypair } = await import("./lib/v2-owner")
 process.env["DEEPAGENT_CODE_V2_OWNER_DEV_MINT"] = "1"
 process.env["DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY"] = ownerDevKeypair().publicKeyPem
+
+// Source-only Windows tests have no original compiled Native capture. Install the
+// same empty-settings root before any test file builds a production Root.
+if (process.platform === "win32") await import("./fixture/source-empty-settings-preload")

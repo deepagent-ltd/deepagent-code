@@ -33,6 +33,7 @@ import { encodeReplayRequestPrefix } from "@/sync/replay-protocol"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
 
 void Log.init({ print: false })
 
@@ -1425,8 +1426,9 @@ describe("sync HttpApi", () => {
             cancelled = true
           },
         })
+        const handler = yield* SourceEmptySettingsRoot.webHandler()
         const response = yield* Effect.promise(() =>
-          HttpApiApp.webHandler().handler(
+          handler.handler(
             new Request(`http://localhost${SyncPaths.replay}`, {
               method: "POST",
               headers: {

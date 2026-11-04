@@ -113,7 +113,7 @@ export function liveLocationServiceMap() {
         // Use the same first-party settings source as the production frame. Core's bare default
         // ignores subagentIntensity, which made this live harness run a different tool policy.
         Layer.unwrap(
-          Effect.map(Effect.promise(SettingsStore.read), (settings) =>
+          Effect.map(SettingsStore.readEffect.pipe(Effect.orDie), (settings) =>
             AgentGateway.runtimeLayer({
               ...gatewayConfigFromSettings(settings.deepagent),
               enabled: process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0",

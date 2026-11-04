@@ -9,6 +9,7 @@ import { PtyID } from "@deepagent-code/core/pty/schema"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import * as Log from "@deepagent-code/core/util/log"
+import { SourceEmptySettingsRoot } from "../fixture/source-empty-settings-root"
 
 void Log.init({ print: false })
 
@@ -23,6 +24,7 @@ function app(input: { password?: string; username?: string }) {
           }),
         ),
       ),
+      Layer.provideMerge(process.platform === "win32" ? SourceEmptySettingsRoot.layer : Layer.empty),
     ),
     { disableLogger: true },
   ).handler

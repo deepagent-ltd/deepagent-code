@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { liveLocationServiceMap } from "../../script/live-llm/runner-frame"
 import { tmpdir } from "../fixture/fixture"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
 
 // A1-06 regression pin: the live harness must serve the PRODUCTION V2 context-tool seam, not
 // Core's honest-unavailable bare host. This builds the real harness map (no mocks) for a fresh
@@ -31,6 +32,7 @@ describe("live-llm harness runner frame", () => {
         }).pipe(
           Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(root) })),
           Effect.provide(liveLocationServiceMap()),
+          Effect.provide(process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty),
           Effect.scoped,
         ),
       )

@@ -10,7 +10,7 @@ import { EmptySettingsFixture } from "./empty-settings"
 
 // A request Context does not supply the independent handler's layer build.
 // Keep real routes and the caller's root map, defaulting to a private root.
-const emptySettings = Layer.unwrap(
+export const layer = Layer.unwrap(
   Effect.gen(function* () {
     if (yield* NativeWindowsBootstrap.Registered)
       return yield* Effect.die(new Error("Empty settings HTTP fixture cannot replace registered Native storage"))
@@ -21,7 +21,7 @@ const emptySettings = Layer.unwrap(
 export function webHandler(routes = HttpApiApp.createRoutes(), memoMap = makeMemoMap()) {
   return Effect.acquireRelease(
     Effect.sync(() =>
-      HttpRouter.toWebHandler(process.platform === "win32" ? routes.pipe(Layer.provideMerge(emptySettings)) : routes, {
+      HttpRouter.toWebHandler(process.platform === "win32" ? routes.pipe(Layer.provideMerge(layer)) : routes, {
         disableLogger: true,
         memoMap,
         middleware: disposeMiddleware,

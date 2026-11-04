@@ -61,7 +61,11 @@ import { ContextQueryFacade } from "@/context-federation/context-query-facade"
 import { InstanceRef } from "@/effect/instance-ref"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { tmpdir } from "../fixture/fixture"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
 import path from "node:path"
+
+const run = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty)))
 
 // W3.10 acceptance (O-W3-10, B-review P0): the V2 runner selection frame must carry the REAL
 // location identity — the same derivation the C6 readiness probe uses — instead of the v2:local pin
@@ -286,7 +290,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       )
     }).pipe(Effect.provide(database), Effect.scoped)
 
-    await Effect.runPromise(program)
+    await run(program)
   })
 
   test("host hook keeps identity undefined and honest v2:local degradation when no handle is attached", async () => {
@@ -317,7 +321,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       expect(seam.code).toBeDefined()
     }).pipe(Effect.scoped)
 
-    await Effect.runPromise(program)
+    await run(program)
   })
 
   test("explicit Core context tools execute inside the ref-owned instance frame", async () => {
@@ -355,7 +359,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       Effect.provide(contextQuery),
       Effect.scoped,
     )
-    await Effect.runPromise(program)
+    await run(program)
   })
 
   test("the keyed Location registry advertises graph tools only when a real index handle exists", async () => {
@@ -392,7 +396,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         ]),
       )
       const definitions = (root: string) =>
-        Effect.runPromise(
+        run(
           Effect.gen(function* () {
             return (yield* (yield* ToolRegistry.Service).materialize()).definitions.map((tool) => tool.name)
           }).pipe(
@@ -484,7 +488,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         Effect.provide(Layer.mergeAll(locations, rootStore, host).pipe(Layer.provide(gateway))),
         Effect.scoped,
       )
-      await Effect.runPromise(program)
+      await run(program)
     } finally {
       Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = previous
     }
@@ -559,7 +563,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     }).pipe(Effect.provide(Layer.mergeAll(
       host, V2RunnerFrame.runtimeIntegrityIdentityLayer, RuntimeIntegrityIdentity.rootIdentitySlotLayer,
     ).pipe(Layer.provide(gateway))), Effect.scoped)
-    await Effect.runPromise(program)
+    await run(program)
     expect(settled).toBe(1)
   })
 })

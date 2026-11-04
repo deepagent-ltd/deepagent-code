@@ -7,12 +7,15 @@ test("file DB exerciser disposes its exact root on success and failure without c
   const root = await mkdtemp(path.join(tmpdir(), "httpapi-cleanup-"))
   await Promise.all(["home", "tmp"].map((name) => mkdir(path.join(root, name))))
   const child = Bun.spawn({
-    cmd: [process.execPath, "test/server/fixture/httpapi-exercise-cleanup-process.ts"],
+    cmd: [process.execPath,
+      ...(process.platform === "win32" ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")] : []),
+      "test/server/fixture/httpapi-exercise-cleanup-process.ts"],
     cwd: path.resolve(import.meta.dir, "../.."),
     env: {
       PATH: process.env.PATH,
       HOME: path.join(root, "home"),
       TMPDIR: path.join(root, "tmp"),
+      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
       DEEPAGENT_CODE_HTTPAPI_EXERCISE_DB: path.join(root, "authority.sqlite"),
       DEEPAGENT_CODE_HTTPAPI_EXERCISE_GLOBAL: path.join(root, "global"),
       DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
