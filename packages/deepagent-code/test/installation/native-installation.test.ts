@@ -11,7 +11,7 @@ import { windowsNativePublisherTools } from "../../../desktop/scripts/test-nativ
 
 const fixture = path.join(import.meta.dir, "fixture/native-installation-process.ts")
 const repository = path.resolve(import.meta.dir, "../../../..")
-const temporary = process.platform === "win32" ? path.join(repository, ".artifacts/unit") : os.tmpdir()
+const temporary = process.platform === "win32" ? (process.env.RUNNER_TEMP ?? path.join(repository, ".artifacts/unit")) : os.tmpdir()
 if (process.platform === "win32") await fs.mkdir(temporary, { recursive: true })
 const directory = await fs.mkdtemp(path.join(temporary, "dac-native-installation-"))
 const executable = path.join(directory, process.platform === "win32" ? "deepagent-code.exe" : "native-fixture")

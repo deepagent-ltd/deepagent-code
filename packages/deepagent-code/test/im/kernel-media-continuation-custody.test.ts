@@ -54,6 +54,7 @@ test("continuation admission bounds concurrent original producers, joins exact b
       })()
     },
     response(topic, request, original) {
+      if (topic === "qry_delivery_capabilities") return { name: "DeliveryCapabilities", value: { version: 1, profile: "mysql-receipt-v1", maxLifetimeMs: 259200000, maxContentBytes: 65536, eventualDelivery: false } }
       if (!original || !topic.startsWith("qry_delivery_")) return original
       return { ...original, value: { ...original.value, version: 2,
         ...(topic === "qry_delivery_changes" ? { items: [], scanProjectionKey: "" } : {}),
@@ -131,6 +132,8 @@ test("continuation admission bounds concurrent original producers, joins exact b
       expect(received.digest("hex")).toBe(checksum)
       expect(calls.map((value) => value.split(" ")[0])).toEqual(["GET", "POST", "PUT", "PUT", "PUT", "POST"])
       expect(native.topics).toContain("qry_delivery_reader")
+      yield* lease.engine.drainPending
+      yield* pollWithTimeout(Effect.sync(() => calls.filter((value) => value.endsWith("/capabilities")).length >= 2 ? true : undefined), "original media delivery did not settle")
       const uncertainPath = AttachmentStorage.deriveStoragePath({ dataDir: Global.Path.data, workspaceID: instance.directory, attachmentID: "ima_uncertain" })
       if (!uncertainPath.ok) return yield* Effect.die(new Error("Private uncertain media path unavailable"))
       const uncertain = yield* lease.reader.withOutput({ workspaceID: instance.directory, userID: "server", groupIDs: [groupID] }, lease.engine.createAttachment!({
@@ -141,7 +144,7 @@ test("continuation admission bounds concurrent original producers, joins exact b
       boundary.uncertain = true
       const before = calls.length
       expect(Exit.isFailure(yield* lease.engine.prepareMediaContinuation!(request("uncertain-original", uncertain.id)).pipe(Effect.exit))).toBe(true)
-      expect(calls.slice(before).map((value) => value.split(" ")[0])).toEqual(["GET", "POST"])
+      expect(calls.slice(before)).toEqual(["GET /navigator/protected-media/v1/capabilities", "POST /navigator/protected-media/v1/objects"])
       const after = calls.length
       expect(yield* lease.engine.prepareMediaContinuation!(request("uncertain-original", uncertain.id)).pipe(Effect.flip))
         .toMatchObject({ message: "The original upload outcome is not settled" })
