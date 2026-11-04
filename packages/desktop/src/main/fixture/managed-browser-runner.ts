@@ -302,8 +302,11 @@ async function main() {
     const prompt = { id: "msg_browser_original", prompt: { text: "Observe the connected local preview in browser, including its PNG." }, resume: true }
     const admitted = await call(`/api/session/${invokeSession.data.id}/prompt`, prompt)
     if (["unknown", "cancel", "crash"].includes(mode)) {
-      const deadline = Date.now() + 15_000
-      while (!previewRequests.includes("/slow") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
+      // The existing 90s child budget bounds actual navigation readiness; do not
+      // stop and restart early, then record a false empty preview request list.
+      const navigationWaitStarted = Date.now()
+      while (!previewRequests.includes("/slow")) await new Promise((resolve) => setTimeout(resolve, 25))
+      console.info("MANAGED_BROWSER_NAVIGATION_READY", mode, Date.now() - navigationWaitStarted)
       let explicitCancel: unknown
       let killedPID: number | undefined
       if (mode === "cancel") explicitCancel = await call(`/api/v1/browser/controls/${controlID}/cancel`, {
