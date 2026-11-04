@@ -4631,7 +4631,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "config-hot-refresh",
     verdict: "safe_scoped",
   },
-  "packages/deepagent-code/src/config/config.ts:closure@1247:1284.missing": {
+  "packages/deepagent-code/src/config/config.ts:closure@1249:1286.missing": {
     owner: "Config.watch-invocation",
     keyScope: "previously-watched-target-directory",
     bound: "configured-target-directory-count",

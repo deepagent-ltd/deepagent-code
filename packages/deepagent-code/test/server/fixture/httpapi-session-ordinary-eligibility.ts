@@ -90,6 +90,15 @@ const facts = () => AppRuntime.runPromise(Effect.gen(function* () {
   }
 }))
 
+const subjectFacts = (id: string) => AppRuntime.runPromise(Effect.gen(function* () {
+  const db = (yield* Database.Service).db
+  return Hash.sha256(JSON.stringify({
+    session: yield* db.all<Record<string, unknown>>(sql`SELECT * FROM session WHERE id = ${id}`),
+    sequence: yield* db.all<Record<string, unknown>>(sql`SELECT * FROM event_sequence WHERE aggregate_id = ${id}`),
+    events: yield* db.all<Record<string, unknown>>(sql`SELECT * FROM event WHERE aggregate_id = ${id} ORDER BY seq`),
+  }))
+}))
+
 const queryOnly = (enabled: boolean) => AppRuntime.runPromise(Database.Service.pipe(Effect.flatMap(({ db }) =>
   db.run(enabled ? "PRAGMA query_only=ON" : "PRAGMA query_only=OFF"))))
 
@@ -154,10 +163,14 @@ try {
   assert.equal("ordinaryEligible" in coreRead.body.data, false, "Core GET DTO is unchanged")
   await queryOnly(false)
   const mutationBaseline = await facts()
+  const mutationSubjectBaseline = await subjectFacts(binding.sessionID)
   const mutation = await request(`/session/${binding.sessionID}`, "PATCH", { title: "not authorized by a display boolean" })
   assert.equal(mutation.status, 409)
   const mutationAfter = await facts()
-  assert.equal(mutationAfter.durableHash, mutationBaseline.durableHash)
+  // The rejected mutator can only change this Session's durable aggregate. Production background
+  // maintenance resumes unrelated writes once the read-only GET census lifts, so a whole-database
+  // hash would attribute those rows to the mutator and race the assertion.
+  assert.equal(await subjectFacts(binding.sessionID), mutationSubjectBaseline)
   assert.deepEqual(mutationAfter.active, mutationBaseline.active)
   assert.deepEqual(mutationAfter.attempts, mutationBaseline.attempts)
   assert.deepEqual(mutationAfter.receipts, mutationBaseline.receipts)
