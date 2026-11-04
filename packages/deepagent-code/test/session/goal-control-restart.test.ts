@@ -1,30 +1,47 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "node:os"
 
+const native: { cohort?: Awaited<ReturnType<typeof import("../fixture/windows-native-cli-cohort").WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const temporary = process.env.RUNNER_TEMP ?? path.resolve(import.meta.dir, "../../.artifacts/unit")
+  await mkdir(temporary, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await realpath(await mkdtemp(path.join(temporary, "dac-goal-control-native-"))),
+    businessEntry: path.resolve(import.meta.dir, "../fixture/goal-control-process.ts"),
+  })
+}, 240_000)
+afterAll(async () => {
+  await native.cohort?.dispose()
+})
+
 for (const scenario of ["paused", "unknown", "wake-before", "wake-after"] as const)
   test(`Goal ${scenario} survives real SIGKILL and cold production-port rejection`, async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "goal-control-process-"))
+    const root = await mkdtemp(path.join(native.cohort?.root ?? tmpdir(), "goal-control-process-"))
     await Promise.all(["home", "tmp", "config", "data", "cache", "state"].map((name) => mkdir(path.join(root, name))))
     const processes: ReturnType<typeof Bun.spawn>[] = []
     const launch = async (phase: string) => {
-      const child = Bun.spawn({
-        cmd: [process.execPath, "test/fixture/goal-control-process.ts", root, phase],
-        cwd: path.resolve(import.meta.dir, "../.."),
-        env: {
-          PATH: process.env.PATH,
-          HOME: path.join(root, "home"),
-          TMPDIR: path.join(root, "tmp"),
-          XDG_CONFIG_HOME: path.join(root, "config"),
-          XDG_DATA_HOME: path.join(root, "data"),
-          XDG_CACHE_HOME: path.join(root, "cache"),
-          XDG_STATE_HOME: path.join(root, "state"),
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      })
+      const env = {
+        PATH: process.env.PATH!,
+        HOME: path.join(root, "home"),
+        TMPDIR: path.join(root, "tmp"),
+        XDG_CONFIG_HOME: path.join(root, "config"),
+        XDG_DATA_HOME: path.join(root, "data"),
+        XDG_CACHE_HOME: path.join(root, "cache"),
+        XDG_STATE_HOME: path.join(root, "state"),
+        ...(native.cohort ? {
+          TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
+          DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"), DEEPAGENT_CODE_HOME: path.join(root, "data"),
+        } : {}),
+      }
+      const command = native.cohort
+        ? await native.cohort.invocation({ args: [root, phase], cwd: root, env })
+        : { cmd: [process.execPath, "test/fixture/goal-control-process.ts", root, phase], cwd: path.resolve(import.meta.dir, "../.."), env }
+      const child = Bun.spawn({ ...command, stdout: "pipe", stderr: "pipe" })
       processes.push(child)
       const errors = new Response(child.stderr).text()
       const ready = (async () => {
@@ -80,6 +97,6 @@ for (const scenario of ["paused", "unknown", "wake-before", "wake-after"] as con
         if (child.exitCode === null) child.kill("SIGKILL")
         await child.exited
       }
-      await rm(root, { recursive: true, force: true })
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   }, 60000)

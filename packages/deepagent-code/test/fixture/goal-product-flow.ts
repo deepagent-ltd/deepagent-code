@@ -159,7 +159,7 @@ const start = () => AppRuntime.runPromise(Effect.gen(function* () {
     permissions: [{ action: "*", resource: "*", effect: "allow" }] })
   const manager = yield* GoalManager.Service
   const receipt = yield* manager.start({ sessionID: session.id, requestID: "goal-product-start",
-    limits: { maxTicks: 3, maxTokens: 30000, maxWallclockMs: 60000 },
+    limits: { maxTicks: 3, maxTokens: 30000, maxWallclockMs: process.platform === "win32" ? 180_000 : 60_000 },
     panelQuestion: { question: "Are both checked steps safe to accept?", codeRefs: [], lenses: ["correctness", "security", "architecture"], maxRounds: 2 } })
   return { session, receipt }
 }))
@@ -181,7 +181,7 @@ try {
       const preparing = AppRuntime.runPromise(GoalManager.Service.use((manager) => manager.start({
         sessionID: session.id, requestID: `control-start-${action}`, objective: "Control an in-flight actual provider",
         criteria: [{ kind: "reviewer_clean", maxSeverity: "high" }, { kind: "panel_approves" }],
-        limits: { maxTicks: 3, maxTokens: 30000, maxWallclockMs: 60000 },
+        limits: { maxTicks: 3, maxTokens: 30000, maxWallclockMs: process.platform === "win32" ? 180_000 : 60_000 },
       })))
       await preparing
       await signal.promise
