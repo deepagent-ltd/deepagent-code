@@ -23,18 +23,19 @@ const resultID = process.argv[5]
 if (!root || !mode || !resultID || !/^[a-f0-9-]{36}$/.test(resultID))
   throw new Error("Private settings fixture arguments required")
 const writes: string[] = []
-async function published(leaf: string, kind: "rename" | "native") {
-  writes.push(leaf)
-  if (stage !== leaf) return
+async function published(leaf: string, kind: "rename" | "native", before = false) {
+  if (!before) writes.push(leaf)
+  if (stage !== (before ? `before:${leaf}` : leaf)) return
   await fs.writeFile(path.join(root, "paused"), JSON.stringify({ kind, stage, pid: process.pid }), {
     mode: 0o600,
     flag: "wx",
   })
-  await new Promise(() => {})
+  while (!(await Bun.file(path.join(root, "resume")).exists())) await Bun.sleep(10)
 }
 
 const rename = fs.rename
 fs.rename = async (source, target) => {
+  await published(path.basename(String(target)), "rename", true)
   await rename(source, target)
   await published(path.basename(String(target)), "rename")
 }
@@ -77,6 +78,7 @@ const program = Effect.gen(function* () {
 })
 const posixDirect = Effect.tryPromise({
   try: async () => {
+    if (mode === "read") await fs.writeFile(path.join(root, "reader-ready"), "")
     if (mode === "read") await SettingsStore.read()
     if (mode === "direct") await SettingsStore.update({ deepagent: { selfLearning: "auto" } })
   },
@@ -96,6 +98,7 @@ const nativeProgram = Effect.gen(function* () {
     yield* settings.publish(leaf, JSON.stringify({ deepagent: { agentMode: "general", selfLearning: "manual" } }), before?.witness ?? null)
     return
   }
+  if (mode === "read") yield* Effect.promise(() => fs.writeFile(path.join(root, "reader-ready"), ""))
   const transaction =
     mode === "read" ? SettingsStore.readEffect :
     mode === "direct" ? SettingsStore.updateEffect({ deepagent: { selfLearning: "auto" } }).pipe(
@@ -104,7 +107,8 @@ const nativeProgram = Effect.gen(function* () {
   yield* transaction.pipe(
     Effect.provideService(WindowsSettingsStorage.Current, {
       ...settings,
-      publish: (name, text, expected) => settings.publish(name, text, expected).pipe(
+      publish: (name, text, expected) => Effect.promise(() => published(name, "native", true)).pipe(
+        Effect.andThen(settings.publish(name, text, expected)),
         Effect.tap(() => Effect.promise(() => published(name, "native"))),
       ),
     }),

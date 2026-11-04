@@ -1,14 +1,25 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterAll, afterEach, beforeAll, describe, expect } from "bun:test"
 import path from "path"
 import { Server } from "../../src/server/server"
 import * as Log from "@deepagent-code/core/util/log"
-import { Effect, Fiber } from "effect"
+import { Effect, Fiber, Layer } from "effect"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
-import { it } from "../lib/effect"
+import { testEffect } from "../lib/effect"
 import { waitGlobalBusEvent } from "./global-bus"
 import { Config } from "../../src/config/config"
 import { SettingsStore } from "../../src/settings/store"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
+
+const windowsConfig = process.platform === "win32" ? await import("../fixture/windows-config") : undefined
+const it = testEffect(Layer.empty, process.env.DAC_CONFIG_NATIVE_CASES === "1"
+  ? Layer.empty
+  : process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty)
+const configCase = (name: string, body: Parameters<typeof it.live>[1], options?: Parameters<typeof it.live>[2]) =>
+  windowsConfig ? windowsConfig.register(name, () => it.live(name, body, options)) : it.live(name, body, options)
+
+beforeAll(() => windowsConfig?.prepare("httpapi-config"), 240_000)
+afterAll(() => windowsConfig?.dispose())
 
 void Log.init({ print: false })
 
@@ -37,7 +48,7 @@ afterEach(async () => {
 const CAPS_KEY = "DEEPAGENT_SERVER_CAPABILITIES"
 
 describe("config HttpApi", () => {
-  it.live(
+  configCase(
     "round-trips native model selections through global and instance PATCH persistence and GET",
     Effect.gen(function* () {
       const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false } })
@@ -71,7 +82,7 @@ describe("config HttpApi", () => {
     }),
   )
 
-  it.live(
+  configCase(
     "denies native and legacy provider writes in both config routes without mutating configuration stores",
     Effect.gen(function* () {
       const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false } })
@@ -121,7 +132,7 @@ describe("config HttpApi", () => {
     }),
   )
 
-  it.live(
+  configCase(
     "IM service configuration uses the shared runtime, ignores project coordinates and stays disconnected until explicit retry",
     Effect.gen(function* () {
       const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false } })
@@ -194,7 +205,7 @@ describe("config HttpApi", () => {
     }),
   )
 
-  it.live(
+  configCase(
     "allows a non-provider config update even when providerConfigEditable is denied",
     Effect.gen(function* () {
       const original = process.env[CAPS_KEY]
@@ -223,7 +234,7 @@ describe("config HttpApi", () => {
     }),
   )
 
-  it.live(
+  configCase(
     "serves config update through the default server app",
     Effect.gen(function* () {
       const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false } })

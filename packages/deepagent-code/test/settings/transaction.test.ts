@@ -175,6 +175,34 @@ async function pauseAndKill(root: string, stage: string, actualExpiry = false) {
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex")
 
+test("read waits for the original receipt during an actual publication window", () =>
+  fixture(async (root) => {
+    const writer = await start(root, "global", randomUUID(), "before:.settings-receipt.json")
+    const output = Promise.all([writer.exited, new Response(writer.stdout).text(), new Response(writer.stderr).text()])
+    const timer = setTimeout(() => writer.kill("SIGKILL"), 15_000)
+    try {
+      const deadline = Date.now() + 12_000
+      while (!(await Bun.file(path.join(root, "paused")).exists()) && writer.exitCode === null && Date.now() < deadline)
+        await Bun.sleep(10)
+      expect(await Bun.file(path.join(root, "paused")).json()).toMatchObject({ stage: "before:.settings-receipt.json" })
+      const reading = run(root, "read")
+      while (!(await Bun.file(path.join(root, "reader-ready")).exists()) && writer.exitCode === null && Date.now() < deadline)
+        await Bun.sleep(10)
+      expect(await Bun.file(path.join(root, "reader-ready")).exists()).toBe(true)
+      await Bun.write(path.join(root, "resume"), "")
+      const [code, stdout, stderr] = await output
+      expect(code, `${stdout}\n${stderr}`).toBe(0)
+      const result = await reading
+      expect(result.code, result.diagnostic).toBe(0)
+      expect(result.writes).toEqual([])
+    } finally {
+      clearTimeout(timer)
+      writer.kill("SIGKILL")
+      await writer.exited
+      await output
+    }
+  }), 25_000)
+
 test("request hashing encodes a bounded tree once and rejects excess depth before any settings write", async () => {
   for (const mode of ["depth59", "depth60"])
     await fixture(async (root) => {

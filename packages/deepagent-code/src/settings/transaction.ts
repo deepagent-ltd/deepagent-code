@@ -195,17 +195,28 @@ export const applyIn = <A>(tx: ConfigFileWrite.Transaction, input: Input<A>) => 
 
 /** Cold and normal reads never repair files. A partial intent gives a safe, retryable error. */
 export const requireSettledEffect = Effect.gen(function* () {
-  const current = yield* journals(paths())
-  if (!current.operation) return
-  const settings = yield* SettingsPrivateFile.readEffect(paths().settings).pipe(Effect.mapError(privateError))
-  const config = current.operation.config ? yield* ConfigFileWrite.read(current.operation.config.path) : undefined
-  const after = yield* journals(paths())
-  if (
-    digest(JSON.stringify(current)) !== digest(JSON.stringify(after)) ||
-    !matches(current.operation, settings?.hash ?? null, config?.stamp?.digest)
-  )
-    return yield* Effect.fail(new Error("unknown"))
-})
+  while (true) {
+    const settled = yield* Effect.gen(function* () {
+      const current = yield* journals(paths())
+      if (!current.operation) return true
+      if (current.receipt && !completed(current.operation, current.receipt))
+        return yield* Effect.fail(new Error("unknown"))
+      const settings = yield* SettingsPrivateFile.readEffect(paths().settings).pipe(Effect.mapError(privateError))
+      const config = current.operation.config ? yield* ConfigFileWrite.read(current.operation.config.path) : undefined
+      const after = yield* journals(paths())
+      return (
+        digest(JSON.stringify(current)) === digest(JSON.stringify(after)) &&
+        matches(current.operation, settings?.hash ?? null, config?.stamp?.digest)
+      )
+    }).pipe(
+      Effect.catch((error: ConfigFileWrite.Error | Error) =>
+        error.reason === "unavailable" ? Effect.succeed(false) : Effect.fail(error),
+      ),
+    )
+    if (settled) return
+    yield* Effect.sleep("5 millis")
+  }
+}).pipe(Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.fail(new Error("unknown")) }))
 
 export async function requireSettled() {
   const exit = await Effect.runPromiseExit(requireSettledEffect)
