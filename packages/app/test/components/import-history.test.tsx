@@ -348,9 +348,9 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     })
   const deadline = setTimeout(() => {
     progress.deadlineExpired = true
-    observe("child-deadline-fired", { deadlineAt: progress.startedAt + 25000 })
+    observe("child-deadline-fired", { deadlineAt: progress.startedAt + 50000 })
     child.kill("SIGTERM")
-  }, 25000)
+  }, 50000)
   try {
     await fs.mkdir(path.join(root, "home"), { recursive: true })
     await waitForImportFixtureReady({ root, startedAt: progress.startedAt,
@@ -507,7 +507,7 @@ it("GUI uses the formal SDK and authenticated production HTTP to publish memory 
     if (progress.failed) console.error("Private GUI import evidence retained", root)
     if (!progress.failed) await fs.rm(root, { recursive: true, force: true })
   }
-}, 30000)
+}, 60000)
 
 it("fails closed against old servers without falling back to unmanaged SSE writes", async () => {
   transport.capabilities.mockResolvedValue(response({ features: { importModes: true } }))

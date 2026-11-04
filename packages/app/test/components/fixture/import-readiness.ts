@@ -2,6 +2,12 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
+// Windows cold starts spend most of the first Effect runtime startup inside Defender/module
+// scanning; keep both budgets bounded but wide enough that a loaded cold runner is not
+// mistaken for a hung fixture. Callers keep a hard child deadline above these values.
+const startupBudgetMs = 45_000
+const runtimeBudgetMs = 30_000
+
 export async function waitForImportFixtureReady(input: {
   root: string
   startedAt: number
@@ -18,15 +24,15 @@ export async function waitForImportFixtureReady(input: {
         typeof value.at === "number" && Number.isFinite(value.at),
     )
     // Module preparation shares the original child budget; it cannot extend runtime readiness.
-    const deadline = Math.min(input.startedAt + 25_000, acquisition ? acquisition.at + 15_000 : Infinity)
+    const deadline = Math.min(input.startedAt + startupBudgetMs, acquisition ? acquisition.at + runtimeBudgetMs : Infinity)
     const ready = await readIfPresent(path.join(input.root, "ready.json"))
     if (Date.now() >= deadline)
       throw new Error(`Private import fixture readiness deadline: ${JSON.stringify({
         elapsedMs: Date.now() - input.startedAt,
         stage: acquisition ? "http-and-database" : "module-preparation",
         runtimeElapsedMs: acquisition ? Date.now() - acquisition.at : undefined,
-        startupBudgetMs: 25_000,
-        runtimeBudgetMs: 15_000,
+        startupBudgetMs,
+        runtimeBudgetMs,
       })}`)
     if (ready !== undefined) return JSON.parse(ready) as unknown
     await sleep(Math.max(0, Math.min(50, deadline - Date.now())))

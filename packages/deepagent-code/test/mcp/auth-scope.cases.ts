@@ -80,6 +80,9 @@ it.instance(
     expect(yield* Effect.promise(() => provider.clientInformation()).pipe(Effect.exit, Effect.map((exit) => exit._tag))).toBe("Failure")
   }),
   { config: { mcp: {} } },
+  // A fresh private layer and database on a loaded macOS CI runner can exceed the 30 s global
+  // default; the flow assertions themselves stay unchanged.
+  90_000,
 )
 
 it.instance(
