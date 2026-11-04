@@ -680,16 +680,18 @@ export const layer = Layer.effect(
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
       Effect.gen(function* () {
-        // Capture before loading: an invalidation during I/O must never label old
-        // bytes as belonging to the newly published generation.
-        const observed = generation.value
-        const result = yield* loadGlobal().pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
-          ),
-          Effect.orElseSucceed((): { config: Info; errors: ConfigError[] } => ({ config: {}, errors: [] })),
-        )
-        return { ...result, generation: observed }
+        while (true) {
+          // Refresh inside the single flight so no waiter receives a stale generation
+          // and then races the other readers to invalidate it again.
+          const observed = generation.value
+          const result = yield* loadGlobal().pipe(
+            Effect.tapError((error) =>
+              Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
+            ),
+            Effect.orElseSucceed((): { config: Info; errors: ConfigError[] } => ({ config: {}, errors: [] })),
+          )
+          if (observed === generation.value) return { ...result, generation: observed }
+        }
       }),
       Duration.infinity,
     )
