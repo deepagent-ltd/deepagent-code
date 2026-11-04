@@ -1,3 +1,4 @@
+import "./test/solid-jsx"
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
 
 // Bun.serve requires its native Response, which Happy DOM replaces globally.
