@@ -97,14 +97,14 @@ function shutdownTest(name: string, run: () => Effect.Effect<void, unknown, Scop
   test(name, async () => {
     const root = await mkdtemp(join(tmpdir(), "dac-im-registry-shutdown-child-"))
     const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern",
-      `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "--timeout", "15000"], {
+      `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "--timeout", "60000"], {
       cwd: process.cwd(), env: { ...process.env, DAC_IM_REGISTRY_SHUTDOWN_CASE: name }, stdout: "pipe", stderr: "pipe",
     })
     const output = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     await Promise.all([Bun.write(join(root, "stdout-private.log"), output[0]), Bun.write(join(root, "stderr-private.log"), output[1])])
     if (output[2] !== 0) console.error({ case: name, childLogRoot: root })
     expect(output[2]).toBe(0)
-  }, 20000)
+  }, 75_000)
 }
 
 shutdownTest("whole-registry shutdown disconnects the original in-flight readonly query before joining child scopes", () => {

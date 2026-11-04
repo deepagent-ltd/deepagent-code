@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import fs from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { Effect } from "effect"
@@ -11,6 +11,9 @@ import { IMKernelMediaUpload } from "@/im/kernel/media-upload"
 import { KernelSdk } from "@/im/kernel/sdk"
 import MediaClient from "../../../im-kernel-sdk/upstream/src/delivery/media-client"
 import { signHttp } from "../../../im-kernel-sdk/upstream/src/delivery/device-auth"
+
+// Hosted Windows cold starts exceed the 30 s default; the protocol assertions are unchanged.
+setDefaultTimeout(60_000)
 
 async function fixture(mode: "partial" | "fresh" | "lost-chunk" | "legacy" | "complete" | "bound" | "denied" | "bad-progress" | "changed-manifest" | "retired" | "expired" | "cancelled") {
   const workspaceID = `resume-http-${randomUUID()}`

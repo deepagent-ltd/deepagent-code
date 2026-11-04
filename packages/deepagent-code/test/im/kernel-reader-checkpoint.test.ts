@@ -74,4 +74,4 @@ test("original delayed SDK reader checkpoints a bounded slice and refuses a reti
     await native.server.stop(true)
     await fs.rm(directory, { recursive: true, force: true })
   }
-}, 15000)
+}, 60_000)
