@@ -221,7 +221,7 @@ export async function build(input: {
     return { root, executable, components, payload: signed.payload, manifests,
       invocation,
       async run(input: { args?: string[]; env?: Record<string, string>; stdin?: string | Uint8Array; milliseconds?: number;
-        inheritEnvironment?: boolean } = {}) {
+        inheritEnvironment?: boolean; cwd?: string } = {}) {
         assert(!state.disposed, "Native CLI cohort is disposed")
         assert((input.args ?? []).length <= 64 && (input.args ?? []).every((arg) => arg.length <= 8192 && !arg.includes("\0")))
         const milliseconds = input.milliseconds ?? 60_000

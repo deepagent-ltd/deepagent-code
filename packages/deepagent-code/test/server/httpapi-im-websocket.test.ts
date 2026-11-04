@@ -40,6 +40,8 @@ import { resetDatabase } from "../fixture/db"
 import { tmpdir, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
+if (process.platform === "win32") await import("../fixture/source-empty-settings-preload")
+
 // RI-117: IM WebSocket integration matrix against a REAL server. The unit seams
 // already exist (im-config clamp, broadcaster caps, tracker lifecycle); the gap was
 // end-to-end proof over real sockets: 1013 on a slow consumer, per-user admission
@@ -220,7 +222,9 @@ describe("IM WebSocket admission (real server)", () => {
   test("warm shared root accepts product origins and isolates two listeners' IM/PTY origins with startup authentication", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const child = Bun.spawn(
-      [process.execPath, path.resolve(import.meta.dir, "../fixture/listener-cors.ts"), tmp.path],
+      [process.execPath,
+        ...(process.platform === "win32" ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")] : []),
+        path.resolve(import.meta.dir, "../fixture/listener-cors.ts"), tmp.path],
       {
         cwd: path.resolve(import.meta.dir, "../.."),
         env: {
@@ -249,18 +253,20 @@ describe("IM WebSocket admission (real server)", () => {
       },
     )
     try {
-      const [code, stdout, stderr] = await withTimeout(
-        Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]),
-        25_000,
-        "shared-root CORS subprocess timed out",
-      )
+      const completion = Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      const [code, stdout, stderr] = await withTimeout(completion, process.platform === "win32" ? 60_000 : 25_000, "shared-root CORS subprocess timed out")
+        .catch(async (error) => {
+          if (child.exitCode === null) child.kill()
+          const [code, stdout, stderr] = await completion
+          throw new Error(`${error instanceof Error ? error.message : String(error)}; exit=${code}; ${stdout}\n${stderr}`)
+        })
       if (code !== 0) throw new Error(`shared-root CORS subprocess failed: ${stdout}\n${stderr}`)
       expect(stdout).toContain("LISTENER_CORS_SHARED_ROOT_PASS")
     } finally {
       if (child.exitCode === null) child.kill()
       await child.exited
     }
-  }, 30_000)
+  }, process.platform === "win32" ? 90_000 : 30_000)
 
   test("caps one user at the per-group limit and reopens the slot after a close", async () => {
     await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
@@ -493,7 +499,9 @@ describe("IM WebSocket env clamp through a real server boot", () => {
       console.log("READY " + listener.url.href)
       await new Promise(() => {})
     `
-    const proc = Bun.spawn(["bun", "--eval", driver], {
+    const proc = Bun.spawn(["bun",
+      ...(process.platform === "win32" ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")] : []),
+      "--eval", driver], {
       cwd: dacRoot,
       env: {
         ...process.env,

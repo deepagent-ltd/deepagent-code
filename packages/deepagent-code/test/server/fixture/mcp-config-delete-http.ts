@@ -79,14 +79,22 @@ const entry = { type: "remote", url: `http://127.0.0.1:${address.port}/mcp`, oau
 const configuration = ["{", "  // deletion preserves this comment", '  "formatter": false,', '  "lsp": false,', '  "command": { "ordinary": { "template": "original ordinary command" } },', '  "mcp": {', `    "wire": ${JSON.stringify({ ...entry, enabled: mode === "metadata" })},`, `    "fault": ${JSON.stringify(entry)},`, `    "shadowGlobal": ${JSON.stringify(entry)},`, `    "legacyCollision": ${JSON.stringify(entry)},`, '    "keeper": { "type": "local", "command": ["echo", "keeper"], "enabled": false, "environment": { "SHARED_REF": "synthetic-reference" } }', "  }", "}"].join("\n")
 await fs.mkdir(Global.Path.config, { recursive: true, mode: 0o700 })
 await fs.writeFile(path.join(Global.Path.config, "config.jsonc"), configuration, { mode: 0o600 })
-await fs.writeFile(path.join(Global.Path.config, "settings.json"), JSON.stringify({ deepagent: { promptMode: "direct", agentMode: "general" } }), { mode: 0o600 })
 await fs.writeFile(path.join(Global.Path.config, "auth.json"), JSON.stringify({ fixture: { type: "api", key: "synthetic-auth-preserved" }, [`http://127.0.0.1:${address.port}`]: { type: "wellknown", key: "SYNTHETIC_REMOTE_CONFIG", token: "synthetic-remote-reference" } }), { mode: 0o600 })
 await fs.writeFile(path.join(directory, "deepagent-code.json"), JSON.stringify({ mcp: { projectOnly: { ...entry, enabled: false } } }))
-await fs.mkdir(path.join(root, "managed"), { mode: 0o700 })
+await fs.mkdir(path.join(root, "managed"), { recursive: true, mode: 0o700 })
 await fs.writeFile(path.join(root, "managed", "deepagent-code.json"), JSON.stringify({ mcp: { managedOnly: entry } }))
 const digest = (file: string) => Bun.file(file).arrayBuffer().then((bytes) => createHash("sha256").update(Buffer.from(bytes)).digest("hex"))
 const unchangedFiles = ["settings.json", "auth.json"].map((name) => path.join(Global.Path.config, name))
 await AppRuntime.runPromise(Database.Service)
+const [{ SettingsStore }, { FSUtil }, { EffectFlock }] = await Promise.all([
+  import("../../../src/settings/store"),
+  import("@deepagent-code/core/fs-util"),
+  import("@deepagent-code/core/util/effect-flock"),
+])
+await AppRuntime.runPromise(SettingsStore.updateEffect({ deepagent: { promptMode: "direct", agentMode: "general" } }).pipe(
+  Effect.provide(FSUtil.defaultLayer),
+  Effect.provide(EffectFlock.defaultLayer),
+))
 const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
 const authorization = `Basic ${Buffer.from(`deepagent-code:${process.env.DEEPAGENT_CODE_SERVER_PASSWORD}`).toString("base64")}`
 const client = createDeepAgentCodeClient({ baseUrl: listener.url.toString(), directory, headers: { authorization }, throwOnError: true })
