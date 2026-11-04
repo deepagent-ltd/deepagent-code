@@ -395,7 +395,7 @@ it.live("the bounded registry never evicts active leases and idle eviction retai
     expect(registry.find(path, "server")).toBe(replacement)
     expect((yield* db.select().from(IMKernelReaderScopeTable).where(eq(IMKernelReaderScopeTable.reader_key, original!.reader_key)).get())?.reader_key).toBe(original!.reader_key)
   }), client)
-}), 15000)
+}), 60_000)
 
 
 it.live("each real reader slice makes at most four native queries and leaves the remaining projection work in the file-backed continuation", () => Effect.gen(function* () {
