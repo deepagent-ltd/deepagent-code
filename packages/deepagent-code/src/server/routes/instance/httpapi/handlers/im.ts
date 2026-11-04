@@ -1,5 +1,6 @@
 import { Effect, Option, Ref, Schema, Stream } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { NodeHttpServerRequest } from "@effect/platform-node"
 import { HttpServerResponse, Multipart } from "effect/unstable/http"
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { and, eq } from "drizzle-orm"
@@ -1698,7 +1699,15 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                     "access-control-expose-headers": "X-IM-Media-Cleanup",
                   },
                 })
-              }).pipe(Effect.scoped),
+              }).pipe(
+                Effect.scoped,
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    // Early multipart exits can leave unread bytes. Drain rather than reset keep-alive peers.
+                    NodeHttpServerRequest.toIncomingMessage(request).resume()
+                  }),
+                ),
+              ),
             ),
           ),
         )
