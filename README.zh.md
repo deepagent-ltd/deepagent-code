@@ -96,7 +96,7 @@ IM 使用独立的设备绑定权益，每份最多绑定 1 台设备，支持 1
 
 ### 从源码运行
 
-使用根 `package.json` 固定的 Bun 版本：当前为 **Bun 1.4.2**。
+使用根 `package.json` 固定的 Bun 版本：当前为 **Bun 1.4.3**。
 
 ```bash
 git clone --branch 2.0.5 --single-branch https://github.com/deepagent-ltd/deepagent-code.git

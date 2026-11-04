@@ -97,7 +97,7 @@ Download the package for your platform from [GitHub Releases](https://github.com
 
 ### Build from source
 
-Use the Bun version pinned in the root `package.json`: **Bun 1.4.2** for this source line.
+Use the Bun version pinned in the root `package.json`: **Bun 1.4.3** for this source line.
 
 ```bash
 git clone --branch 2.0.5 --single-branch https://github.com/deepagent-ltd/deepagent-code.git
