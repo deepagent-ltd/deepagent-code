@@ -132,17 +132,18 @@ jobs:
 
   unit:
     name: unit (${{ matrix.settings.name }}, ${{ matrix.suite }}, ${{ matrix.shard }})
-    # Windows setup and report collection need time outside the 60-minute unit step.
-    timeout-minutes: ${{ matrix.settings.name == 'windows' && 75 || matrix.settings.timeout }}
+    # Windows setup and report collection need time outside the unit step. The 4-vCPU hosted
+    # runner needs beyond 60 minutes for the full cli shards under the current suite size.
+    timeout-minutes: ${{ matrix.settings.name == 'windows' && 135 || matrix.settings.timeout }}
     strategy:
       fail-fast: false
       matrix:
         settings: >-
           ${{ fromJSON(
             inputs.platform == 'linux' && '[{"name":"linux","host":"ubuntu-24.04","timeout":60}]' ||
-            inputs.platform == 'windows' && '[{"name":"windows","host":"windows-2025","timeout":60}]' ||
+            inputs.platform == 'windows' && '[{"name":"windows","host":"windows-2025","timeout":120}]' ||
             inputs.platform == 'macos' && '[{"name":"macos","host":"macos-14","timeout":120}]' ||
-            '[{"name":"linux","host":"ubuntu-24.04","timeout":60},{"name":"windows","host":"windows-2025","timeout":60},{"name":"macos","host":"macos-14","timeout":120}]'
+            '[{"name":"linux","host":"ubuntu-24.04","timeout":60},{"name":"windows","host":"windows-2025","timeout":120},{"name":"macos","host":"macos-14","timeout":120}]'
           ) }}
         # Fresh isolated databases deliberately exercise the full migration chain.
         # Partition the two large packages by file while running every other package once.
