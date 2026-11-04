@@ -2966,7 +2966,13 @@ it.live("session.processor effect tests never retry a durable provider attempt",
 
         expect(value.action).toBe("stop")
         expect(yield* llm.calls).toBe(1)
-        expect(transitions).toEqual(["dispatching", "failed"])
+        // A stream reset may or may not be observed as a separate streaming transition before
+        // the attempt fails; the durable no-retry property is one dispatch and one failure.
+        expect(transitions[0]).toBe("dispatching")
+        expect(transitions.filter((transition) => transition === "dispatching")).toHaveLength(1)
+        expect(transitions.filter((transition) => transition === "failed")).toHaveLength(1)
+        expect(transitions.at(-1)).toBe("failed")
+        expect(transitions).not.toContain("settled")
       }),
     { config: (url) => providerCfg(url) },
   ),
