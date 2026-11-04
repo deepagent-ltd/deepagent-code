@@ -109,7 +109,7 @@ test("a non-ready store starts only the authenticated read-only maintenance shel
   } finally {
     recovered.close()
   }
-}, process.platform === "win32" ? 60_000 : 5_000)
+}, 60_000)
 
 test("the ready runtime abandons one exact indeterminate provider attempt through the maintenance API", async () => {
   await using root = await tmpdir()
