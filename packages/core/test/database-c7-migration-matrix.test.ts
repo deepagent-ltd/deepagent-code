@@ -65,6 +65,14 @@ const topLevelRun = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(eff
 
 const readOnly = (filename: string) => new BunDatabase(filename, { readonly: true })
 
+// Windows releases SQLite handles asynchronously; a durable publish over a just-closed file can
+// observe a transient sharing violation on a loaded runner.
+const settleFileHandles = async () => {
+  if (process.platform !== "win32") return
+  Bun.gc(true)
+  await Bun.sleep(100)
+}
+
 const countIn = (filename: string, table: string): number => {
   const db = readOnly(filename)
   try {
@@ -618,6 +626,7 @@ describe("C7-02 · restore-over-existing + incident recovery", () => {
     db.run("CREATE TABLE markers (id TEXT PRIMARY KEY)")
     db.run("INSERT INTO markers VALUES ('pre-existing'),('second')")
     db.close()
+    await settleFileHandles()
     expect(markerOf(overExisting).length).toBe(2)
 
     const rm = await run(Restore.restoreVerified({ dbPath: overExisting, backup: manifest }))
@@ -632,6 +641,7 @@ describe("C7-02 · restore-over-existing + incident recovery", () => {
     const spec = eras.find((era) => era.name === "incident-unknown")!
     await spec.seed!(incidentLive)
     expect((await Database.bootstrap(incidentLive)).mode).toBe("blocked_schema")
+    await settleFileHandles()
 
     const recover = await run(Restore.restoreVerified({ dbPath: incidentLive, backup: manifest }))
     expect(recover.outcome).toBe("restored")
