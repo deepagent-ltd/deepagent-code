@@ -9,6 +9,7 @@ import { McpAuthScope } from "../../src/mcp/auth-scope"
 import { PrivateSqlite } from "@deepagent-code/core/database/private-sqlite"
 import { Global } from "@deepagent-code/core/global"
 import { Config } from "../../src/config/config"
+import { NativeAuthStorage } from "./mcp-native-auth-storage"
 
 const root = process.env.DAC_MCP_COLD_ROOT
 assert(root && path.basename(root).startsWith("dac-mcp-oauth-cold-"))
@@ -134,5 +135,5 @@ await Effect.runPromise(
         }),
       )
     }),
-  ).pipe(Effect.provide(layer)),
+  ).pipe(Effect.provide(layer), Effect.provide(process.platform === "win32" ? NativeAuthStorage.layer : Layer.empty)),
 )

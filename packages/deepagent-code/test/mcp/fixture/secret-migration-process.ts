@@ -574,6 +574,7 @@ const result = await Effect.runPromiseExit(
               Layer.provide(route),
               Layer.provide(credentials),
               Layer.provide(cors),
+              Layer.provide(Layer.succeedContext(context)),
               Layer.provide(Layer.succeed(MCP.Service, mcp)),
               Layer.provide(Layer.succeed(Config.Service, cfg)),
               Layer.provide(Layer.succeed(InstanceStore.Service, instances)),

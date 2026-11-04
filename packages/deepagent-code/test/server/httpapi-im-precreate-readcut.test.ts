@@ -269,7 +269,10 @@ test("original V2 HTTP GET remains read-only and text precreate refreshes before
   // Preserve only the ordinary execution environment. The package preload
   // supplies the dev owner chain; no provider credentials cross into this child.
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|CREDENTIAL|DEEPAGENT_|DAC_HTTP_PRECREATE_READCUT_)/.test(key)))
-  const child = Bun.spawn([process.execPath, "--conditions=browser", "test", "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"), import.meta.path, "--timeout", "30000"], {
+  const child = Bun.spawn([process.execPath, "--conditions=browser", "test",
+    "--preload", path.resolve(import.meta.dir, "../fixture/cli-secret-store.ts"),
+    ...(process.platform === "win32" ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")] : []),
+    import.meta.path, "--timeout", "30000"], {
     cwd: path.resolve(import.meta.dir, "../.."), stdout: stdout.fd, stderr: stderr.fd,
     env: { ...inherited, NODE_EXTRA_CA_CERTS: tls.certificatePath, DAC_HTTP_PRECREATE_READCUT_CHILD: "1", DAC_HTTP_PRECREATE_READCUT_DIRECTORY: directory,
       DEEPAGENT_CODE_TEST_HOME: directory, DEEPAGENT_CODE_HOME: path.join(directory, ".deepagent", "code"),

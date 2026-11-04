@@ -88,4 +88,4 @@ test("the actual fixed Host engine rejects retired identity before attachment lo
     await fs.rm(directory, { recursive: true, force: true })
     expect(await Bun.file(path.join(directory, "private.sqlite")).exists()).toBe(false)
   }
-}, 10000)
+}, process.platform === "win32" ? 60_000 : 10_000)

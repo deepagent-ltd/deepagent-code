@@ -1,12 +1,27 @@
-import { expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
 
 const fixture = path.resolve(import.meta.dir, "../fixture/mcp-oauth-cold.ts")
+const native: { cohort?: Awaited<ReturnType<typeof import("../fixture/windows-native-cli-cohort").WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { WindowsNativeCliCohort } = await import("../fixture/windows-native-cli-cohort")
+  const directory = path.join(process.env.RUNNER_TEMP ?? path.resolve(import.meta.dir, "../../.artifacts/unit"), "windows-oauth-journal-http")
+  await fs.mkdir(directory, { recursive: true })
+  native.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: fixture,
+    extraSources: [import.meta.path],
+  })
+}, 240_000)
+afterAll(async () => {
+  await native.cohort?.dispose()
+})
 test("real SDK token dispatch survives SIGKILL and cold actual scope GET and callback never repeat it", async () => {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-oauth-cold-")))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(native.cohort?.root ?? os.tmpdir(), "dac-mcp-oauth-cold-")))
   await Promise.all(["home", "tmp", "project"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))
   const token = Promise.withResolvers<void>()
   const hold = Promise.withResolvers<Response>()
@@ -57,23 +72,27 @@ test("real SDK token dispatch survives SIGKILL and cold actual scope GET and cal
       },
     }),
   )
-  const spawn = (mode: string) =>
-    Bun.spawn([process.execPath, fixture, mode], {
-      cwd: path.resolve(import.meta.dir, "../.."),
-      env: {
-        PATH: process.env.PATH,
-        HOME: path.join(root, "home"),
-        TMPDIR: path.join(root, "tmp"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
-        DEEPAGENT_CODE_DB: path.join(root, "home", ".deepagent", "code", "authority.sqlite"),
-        DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
-        DAC_MCP_COLD_ROOT: root,
-        DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-  const first = spawn("exchange")
+  const spawn = async (mode: string) => {
+    const env = {
+      PATH: process.env.PATH!,
+      HOME: path.join(root, "home"),
+      TMPDIR: path.join(root, "tmp"),
+      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+      DEEPAGENT_CODE_DB: path.join(root, "home", ".deepagent", "code", "authority.sqlite"),
+      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
+      DAC_MCP_COLD_ROOT: root,
+      DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
+      ...(native.cohort ? {
+        TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
+        DEEPAGENT_CODE_HOME: path.join(root, "home", ".deepagent", "code"),
+      } : {}),
+    }
+    const command = native.cohort
+      ? await native.cohort.invocation({ args: [mode], cwd: root, env })
+      : { cmd: [process.execPath, fixture, mode], cwd: path.resolve(import.meta.dir, "../.."), env }
+    return Bun.spawn({ ...command, stdout: "pipe", stderr: "pipe" })
+  }
+  const first = await spawn("exchange")
   const firstOut = new Response(first.stdout).text()
   const firstErr = new Response(first.stderr).text()
   const limit = setTimeout(() => {
@@ -100,7 +119,7 @@ test("real SDK token dispatch survives SIGKILL and cold actual scope GET and cal
       .update(await fs.readFile(file))
       .digest("hex")
     const atCrash = calls.length
-    const second = spawn("read")
+    const second = await spawn("read")
     const deadline = setTimeout(() => second.kill(), 20000)
     const [code, stdout, stderr] = await Promise.all([
       second.exited,
@@ -139,7 +158,7 @@ test("real SDK token dispatch survives SIGKILL and cold actual scope GET and cal
 }, 50000)
 
 test("two real business Roots at one directory share a private journal but isolate actual SQL namespace identity", async () => {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-mcp-oauth-cold-")))
+  const root = await fs.realpath(await fs.mkdtemp(path.join(native.cohort?.root ?? os.tmpdir(), "dac-mcp-oauth-cold-")))
   await Promise.all(["home", "tmp", "project"].map((name) => fs.mkdir(path.join(root, name), { mode: 0o700 })))
   const calls: string[] = []
   const listener = Bun.serve({
@@ -192,29 +211,33 @@ test("two real business Roots at one directory share a private journal but isola
       mcp: { cold: { type: "remote", url: `${listener.url.origin}/mcp`, oauth: { clientId: "two-root-client" } } },
     }),
   )
-  const spawn = (mode: "namespace-a" | "namespace-b") =>
-    Bun.spawn([process.execPath, fixture, mode], {
-      cwd: path.resolve(import.meta.dir, "../.."),
-      env: {
-        PATH: process.env.PATH,
-        HOME: path.join(root, "home"),
-        TMPDIR: path.join(root, "tmp"),
-        DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
-        DEEPAGENT_CODE_DB: path.join(
-          root,
-          "home",
-          ".deepagent",
-          "code",
-          mode === "namespace-a" ? "authority.sqlite" : "authority-two.sqlite",
-        ),
-        DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
-        DAC_MCP_COLD_ROOT: root,
-        DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-  const processes: ReturnType<typeof spawn>[] = []
+  const spawn = async (mode: "namespace-a" | "namespace-b") => {
+    const env = {
+      PATH: process.env.PATH!,
+      HOME: path.join(root, "home"),
+      TMPDIR: path.join(root, "tmp"),
+      DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
+      DEEPAGENT_CODE_DB: path.join(
+        root,
+        "home",
+        ".deepagent",
+        "code",
+        mode === "namespace-a" ? "authority.sqlite" : "authority-two.sqlite",
+      ),
+      DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(root, "managed"),
+      DAC_MCP_COLD_ROOT: root,
+      DEEPAGENT_CODE_MODELS_PATH: path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"),
+      ...(native.cohort ? {
+        TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp"),
+        DEEPAGENT_CODE_HOME: path.join(root, "home", ".deepagent", "code"),
+      } : {}),
+    }
+    const command = native.cohort
+      ? await native.cohort.invocation({ args: [mode], cwd: root, env })
+      : { cmd: [process.execPath, fixture, mode], cwd: path.resolve(import.meta.dir, "../.."), env }
+    return Bun.spawn({ ...command, stdout: "pipe", stderr: "pipe" })
+  }
+  const processes: Bun.Subprocess[] = []
   const outputs: Promise<string>[] = []
   const barrier = async (name: string) => {
     const deadline = Date.now() + 15000
@@ -230,7 +253,7 @@ test("two real business Roots at one directory share a private journal but isola
   }
   try {
     for (const mode of ["namespace-a", "namespace-b"] as const) {
-      const process = spawn(mode)
+      const process = await spawn(mode)
       processes.push(process)
       outputs.push(
         Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text()]).then((parts) =>

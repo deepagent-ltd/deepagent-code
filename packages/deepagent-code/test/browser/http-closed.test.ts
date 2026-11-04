@@ -32,7 +32,7 @@ test(process.platform === "win32"
         DEEPAGENT_CODE_SERVER_USERNAME: "operator", DEEPAGENT_CODE_SERVER_PASSWORD: mode === "authenticated" ? "private-fixture" : "",
         DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", DEEPAGENT_IM_AGENT_RESPONDER: "off", DAC_BROWSER_TEST_ROOT: instance, NO_COLOR: "1" },
       stdout: "pipe", stderr: "pipe" })
-    const timeout = setTimeout(() => child.kill(), 45_000)
+    const timeout = setTimeout(() => child.kill(), process.platform === "win32" ? 120_000 : 45_000)
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
     clearTimeout(timeout)
     await Bun.write(path.join(instance, "process.log"), stdout + "\n" + stderr)
@@ -57,4 +57,4 @@ test(process.platform === "win32"
   expect(result.actions).toBe(0)
   expect(result.hostAvailable).toBe(false)
   expect(result.bunLoaded).toBe(false)
-}, 60_000)
+}, process.platform === "win32" ? 180_000 : 60_000)
