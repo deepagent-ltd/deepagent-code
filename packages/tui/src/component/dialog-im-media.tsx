@@ -144,11 +144,7 @@ export function DialogIMMedia(props: {
         if (!active()) return
         setState("attachment", value)
       }
-      if (
-        !props.identity ||
-        !(await props.client.mediaEnabled(abort.signal))
-      )
-        return
+      if (!props.identity || !(await props.client.mediaEnabled(abort.signal))) return
       if (!active()) return
       const status = await props.client.facadeStatus(abort.signal)
       if (!active()) return
@@ -156,10 +152,17 @@ export function DialogIMMedia(props: {
         const detail = await props.client.getGroup(props.group.id, abort.signal)
         if (!active()) return
         // Pending history is distinct from the server's current send authority.
-        if (detail.group.id !== owner.groupID || detail.group.workspaceID !== owner.workspaceID ||
-            (detail.group.reader?.state !== "pending" && detail.group.reader?.state !== "ready") ||
-            !status.viewer?.memberID || status.reader?.state !== "ready" || status.kernel !== "connected" ||
-            !detail.reader || detail.reader.displayEpoch !== status.reader.displayEpoch) return
+        if (
+          detail.group.id !== owner.groupID ||
+          detail.group.workspaceID !== owner.workspaceID ||
+          (detail.group.reader?.state !== "pending" && detail.group.reader?.state !== "ready") ||
+          !status.viewer?.memberID ||
+          status.reader?.state !== "ready" ||
+          status.kernel !== "connected" ||
+          !detail.reader ||
+          detail.reader.displayEpoch !== status.reader.displayEpoch
+        )
+          return
       }
       if (Schema.is(MediaBatch.Policy)(status.media)) setState("policy", status.media)
       setState("enabled", !state.policy || state.policy.enabled)
@@ -379,8 +382,14 @@ export function DialogIMMedia(props: {
       props.back()
       return
     }
-    if (!state.enabled && action !== "download" && action !== "preview" &&
-      !action.startsWith("remote:") && !action.startsWith("details:")) return
+    if (
+      !state.enabled &&
+      action !== "download" &&
+      action !== "preview" &&
+      !action.startsWith("remote:") &&
+      !action.startsWith("details:")
+    )
+      return
     if (action === "choose") {
       setState("form", {
         title: i18n.t("tui.im.media.upload"),
@@ -410,11 +419,16 @@ export function DialogIMMedia(props: {
         fields: [{ label: i18n.t("tui.im.media.batch.note"), value: state.caption }],
         submit: async (values, current) => {
           const record = draft() && structuredClone(unwrap(draft()!))
-          if (!record || !active() || !current()) return
-          await batchStore.put(MediaBatch.edit(record, { content: values[0] }), record.revision)
-          if (active() && current()) {
-            setState({ caption: values[0], form: undefined })
-            await reload()
+          if (!record || state.busy || !active() || !current()) return
+          setState("busy", true)
+          try {
+            await batchStore.put(MediaBatch.edit(record, { content: values[0] }), record.revision)
+            if (active() && current()) {
+              setState({ caption: values[0], form: undefined })
+              await reload()
+            }
+          } finally {
+            if (active()) setState("busy", false)
           }
         },
       })

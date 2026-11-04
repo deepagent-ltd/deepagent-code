@@ -62,19 +62,43 @@ const result = await Effect.runPromise(
       if (mode === "fs-after-reserve") {
         const bytes = Buffer.from("actual reserved media filesystem failure")
         const phases: { stage: string; unixMs: number; monotonicNs: string }[] = []
-        const observed = (stage: string) => phases.push({ stage, unixMs: Date.now(), monotonicNs: process.hrtime.bigint().toString() })
-        const usage = () => Effect.runPromise(db.get<{ records: number; payload: number; bytes: number }>(sql`SELECT count(*) records,coalesce(sum(CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END),0) payload,coalesce(sum(${AttachmentStorage.recordOverheadBytes}+length(CAST(json_array(workspace_id,project_id,group_id,uploaded_by,storage_path,filename,mime,checksum) AS BLOB))+CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END),0) bytes FROM ${AttachmentTable}`))
+        const observed = (stage: string) =>
+          phases.push({ stage, unixMs: Date.now(), monotonicNs: process.hrtime.bigint().toString() })
+        const usage = () =>
+          Effect.runPromise(
+            db.get<{ records: number; payload: number; bytes: number }>(
+              sql`SELECT count(*) records,coalesce(sum(CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END),0) payload,coalesce(sum(${AttachmentStorage.recordOverheadBytes}+length(CAST(json_array(workspace_id,project_id,group_id,uploaded_by,storage_path,filename,mime,checksum) AS BLOB))+CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END),0) bytes FROM ${AttachmentTable}`,
+            ),
+          )
         await fs.writeFile(source, bytes, { mode: 0o600 })
         const staged = await Effect.runPromise(IMMedia.stagedFile({ path: source, mime: "application/octet-stream" }))
         observed("original_staged_source_validated")
-        const derived = AttachmentStorage.deriveStoragePath({ dataDir: Global.Path.data, workspaceID, attachmentID: "ima_fs_after_reserve" })
+        const derived = AttachmentStorage.deriveStoragePath({
+          dataDir: Global.Path.data,
+          workspaceID,
+          attachmentID: "ima_fs_after_reserve",
+        })
         assert(derived.ok)
-        const value = await Effect.runPromise(repo.createAttachment({
-          id: "ima_fs_after_reserve", workspaceID, uploadedBy: "server", storagePath: derived.storagePath,
-          filename: "private.bin", mime: staged.mime, sizeBytes: staged.sizeBytes, checksum: staged.checksum,
-        }))
+        const value = await Effect.runPromise(
+          repo.createAttachment({
+            id: "ima_fs_after_reserve",
+            workspaceID,
+            uploadedBy: "server",
+            storagePath: derived.storagePath,
+            filename: "private.bin",
+            mime: staged.mime,
+            sizeBytes: staged.sizeBytes,
+            checksum: staged.checksum,
+          }),
+        )
         observed("actual_sql_reserve_committed")
-        const reserved = await Effect.runPromise(db.select().from(AttachmentTable).where(eq(AttachmentTable.id, AttachmentID.make(value.id))).get())
+        const reserved = await Effect.runPromise(
+          db
+            .select()
+            .from(AttachmentTable)
+            .where(eq(AttachmentTable.id, AttachmentID.make(value.id)))
+            .get(),
+        )
         assert(reserved)
         assert.equal(reserved.message_id, null)
         assert.equal(reserved.uploaded_by, "server")
@@ -87,10 +111,14 @@ const result = await Effect.runPromise(
         await fs.symlink(original, source)
         observed("owned_source_replaced_after_reserve")
         const syscall = await fs.open(source, constants.O_RDONLY | constants.O_NOFOLLOW).then(
-          async (file) => { await file.close(); return { code: "unexpected_success", errno: null, syscall: "open" } },
-          (error: unknown) => error !== null && typeof error === "object" && "code" in error && "errno" in error && "syscall" in error
-            ? { code: error.code, errno: error.errno, syscall: error.syscall }
-            : { code: "unclassified", errno: null, syscall: "unclassified" },
+          async (file) => {
+            await file.close()
+            return { code: "unexpected_success", errno: null, syscall: "open" }
+          },
+          (error: unknown) =>
+            error !== null && typeof error === "object" && "code" in error && "errno" in error && "syscall" in error
+              ? { code: error.code, errno: error.errno, syscall: error.syscall }
+              : { code: "unclassified", errno: null, syscall: "unclassified" },
         )
         assert.equal(syscall.code, "ELOOP")
         assert.equal(typeof syscall.errno, "number")
@@ -100,24 +128,58 @@ const result = await Effect.runPromise(
         if (copied._tag !== "Failure") throw new Error("Original copy unexpectedly succeeded")
         assert.equal(copied.failure.name, "ATTACHMENT_UNAVAILABLE")
         observed("original_staged_copy_rejected")
-        assert.equal(await fs.lstat(value.storagePath).then(() => true, () => false), false)
+        assert.equal(
+          await fs.lstat(value.storagePath).then(
+            () => true,
+            () => false,
+          ),
+          false,
+        )
         const parent = await MediaFiles.directory(workspaceID)
         const inventory = await fs.readdir(parent.path)
         assert.deepEqual(inventory, [])
         assert((await fs.lstat(source)).isSymbolicLink())
         assert.deepEqual(await fs.readFile(original), bytes)
-        const held = await Effect.runPromise(db.select().from(AttachmentTable).where(eq(AttachmentTable.id, AttachmentID.make(value.id))).get())
+        const held = await Effect.runPromise(
+          db
+            .select()
+            .from(AttachmentTable)
+            .where(eq(AttachmentTable.id, AttachmentID.make(value.id)))
+            .get(),
+        )
         assert.deepEqual(held, reserved)
         assert.deepEqual(await usage(), before)
         assert.equal(AttachmentStorage.expiresAt(value.createdAt), value.createdAt + 86_400_000)
-        assert.deepEqual(await Effect.runPromise(IMMedia.cleanup(repo, workspaceID)), { state: "complete", scanned: 0, removed: 0, failedCount: 0 })
+        assert.deepEqual(await Effect.runPromise(IMMedia.cleanup(repo, workspaceID)), {
+          state: "complete",
+          scanned: 0,
+          removed: 0,
+          failedCount: 0,
+        })
         assert.deepEqual(await usage(), before)
         observed("pre_expiry_cleanup_preserved_reserve")
         const expiredCreatedAt = Date.now() - AttachmentStorage.ttlMs() - 1_000
-        await Effect.runPromise(db.update(AttachmentTable).set({ created_at: expiredCreatedAt }).where(eq(AttachmentTable.id, AttachmentID.make(value.id))).run())
+        await Effect.runPromise(
+          db
+            .update(AttachmentTable)
+            .set({ created_at: expiredCreatedAt })
+            .where(eq(AttachmentTable.id, AttachmentID.make(value.id)))
+            .run(),
+        )
         observed("qa_only_original_ttl_predicate_backdated")
-        assert.deepEqual(await Effect.runPromise(IMMedia.cleanup(repo, workspaceID)), { state: "complete", scanned: 1, removed: 1, failedCount: 0 })
-        const tombstone = await Effect.runPromise(db.select().from(AttachmentTable).where(eq(AttachmentTable.id, AttachmentID.make(value.id))).get())
+        assert.deepEqual(await Effect.runPromise(IMMedia.cleanup(repo, workspaceID)), {
+          state: "complete",
+          scanned: 1,
+          removed: 1,
+          failedCount: 0,
+        })
+        const tombstone = await Effect.runPromise(
+          db
+            .select()
+            .from(AttachmentTable)
+            .where(eq(AttachmentTable.id, AttachmentID.make(value.id)))
+            .get(),
+        )
         assert(tombstone)
         assert.equal(tombstone.id, reserved.id)
         assert.equal(tombstone.uploaded_by, reserved.uploaded_by)
@@ -134,8 +196,34 @@ const result = await Effect.runPromise(
         assert.deepEqual(await fs.readdir(parent.path), [])
         assert.deepEqual(await fs.readFile(original), bytes)
         observed("original_cleanup_released_payload_preserved_metadata")
-        const evidence = { mode, phases, syscall, copiedError: copied.failure.name, partialInventory: inventory, originalRowHeld: true, unboundOwner: reserved.uploaded_by, messageID: reserved.message_id, attachmentID: value.id, originalCreatedAt: value.createdAt, originalExpiresAt: AttachmentStorage.expiresAt(value.createdAt), ttlMs: AttachmentStorage.ttlMs(), expiredCreatedAt, before, after, payloadBytesReleased: before.payload - after.payload, sourceOriginalBytesPreserved: true, partialRemoved: true, sameIDTombstone: true, qualification: "real local source-file nofollow syscall probe plus original staged.copy/repository/fileDB/cleanup; original copy maps raw errno to typed unavailable; no intercepted FS methods, no remote Kernel checkpoint", expiryQualification: "QA-only row created_at backdate selects original fixed TTL predicate; not 24h wall-clock elapsed" }
-        await fs.writeFile(path.join(root, "fs-after-reserve-safe.json"), JSON.stringify(evidence, null, 2) + "\n", { mode: 0o600 })
+        const evidence = {
+          mode,
+          phases,
+          syscall,
+          copiedError: copied.failure.name,
+          partialInventory: inventory,
+          originalRowHeld: true,
+          unboundOwner: reserved.uploaded_by,
+          messageID: reserved.message_id,
+          attachmentID: value.id,
+          originalCreatedAt: value.createdAt,
+          originalExpiresAt: AttachmentStorage.expiresAt(value.createdAt),
+          ttlMs: AttachmentStorage.ttlMs(),
+          expiredCreatedAt,
+          before,
+          after,
+          payloadBytesReleased: before.payload - after.payload,
+          sourceOriginalBytesPreserved: true,
+          partialRemoved: true,
+          sameIDTombstone: true,
+          qualification:
+            "real local source-file nofollow syscall probe plus original staged.copy/repository/fileDB/cleanup; original copy maps raw errno to typed unavailable; no intercepted FS methods, no remote Kernel checkpoint",
+          expiryQualification:
+            "QA-only row created_at backdate selects original fixed TTL predicate; not 24h wall-clock elapsed",
+        }
+        await fs.writeFile(path.join(root, "fs-after-reserve-safe.json"), JSON.stringify(evidence, null, 2) + "\n", {
+          mode: 0o600,
+        })
         return evidence
       }
       if (mode === "cleanup-first") {
@@ -211,8 +299,47 @@ const result = await Effect.runPromise(
       const input = { id: value.id, workspaceID, userID: "server" }
       const descriptor = await Effect.runPromise(IMMedia.attachment(repo, input))
       const stat = await fs.lstat(value.storagePath, { bigint: true })
-      const descriptors = async () =>
-        (
+      const descriptors = async () => {
+        if (process.platform === "win32") {
+          assert(process.env.SystemRoot)
+          const script = `
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeFd {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
+  static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+  public static int Open(string path) {
+    var handle=CreateFile(path, 0x80000000, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    if (handle.ToInt64() == -1) return 1;
+    CloseHandle(handle);
+    return 0;
+  }
+}
+'@
+exit [NativeFd]::Open($env:DAC_MEDIA_FD_PATH)
+`
+          const checked = Bun.spawnSync(
+            [
+              path.win32.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-EncodedCommand",
+              Buffer.from(script, "utf16le").toString("base64"),
+            ],
+            {
+              env: { SystemRoot: process.env.SystemRoot, DAC_MEDIA_FD_PATH: value.storagePath },
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          )
+          return checked.exitCode === 0 ? 0 : 1
+        }
+        return (
           await Promise.all(
             (await fs.readdir("/dev/fd")).map((name) =>
               fs.stat(`/dev/fd/${name}`, { bigint: true }).then(
@@ -222,6 +349,7 @@ const result = await Effect.runPromise(
             ),
           )
         ).filter(Boolean).length
+      }
       assert.equal(await descriptors(), 0)
       let chunks = 0
       let revoke = false
@@ -287,12 +415,44 @@ const result = await Effect.runPromise(
         assert.equal(chunks, 1)
         assert(deniedBytes <= 262144)
         await waiting(async () => (await descriptors()) === 0)
-        await fs.chmod(value.storagePath, 0o644)
+        const fileACL = (action: "/grant" | "/remove:g") => {
+          if (process.platform !== "win32") return fs.chmod(value.storagePath, action === "/grant" ? 0o644 : 0o600)
+          assert(process.env.SystemRoot)
+          const script = `
+$ErrorActionPreference='Stop'
+Import-Module -Name ($PSHOME+'/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+$acl=Get-Acl -LiteralPath $env:DAC_MEDIA_FD_PATH
+$rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+if ($env:DAC_MEDIA_ACL_ACTION -eq 'grant') { $acl.AddAccessRule($rule) } else { $acl.RemoveAccessRule($rule) }
+Set-Acl -LiteralPath $env:DAC_MEDIA_FD_PATH -AclObject $acl
+`
+          const checked = Bun.spawnSync(
+            [
+              path.win32.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-EncodedCommand",
+              Buffer.from(script, "utf16le").toString("base64"),
+            ],
+            {
+              env: {
+                SystemRoot: process.env.SystemRoot,
+                DAC_MEDIA_FD_PATH: value.storagePath,
+                DAC_MEDIA_ACL_ACTION: action === "/grant" ? "grant" : "remove",
+              },
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          )
+          assert.equal(checked.exitCode, 0, checked.stdout.toString() + checked.stderr.toString())
+        }
+        await fileACL("/grant")
         await assert.rejects(
           MediaFiles.open(descriptor),
           (error: unknown) => error instanceof MediaFiles.Error && error.code === "unsafe",
         )
-        await fs.chmod(value.storagePath, 0o600)
+        await fileACL("/remove:g")
         const pinned = await MediaFiles.open(descriptor)
         const original = `${value.storagePath}.original`
         try {
@@ -319,9 +479,9 @@ const result = await Effect.runPromise(
         assert(canceledPath.ok)
         const canceledCopy = await Effect.runPromise(
           repo.createAttachment({
-          ...value,
-          id: "ima_canceled_copy",
-          projectID: value.projectID ?? undefined,
+            ...value,
+            id: "ima_canceled_copy",
+            projectID: value.projectID ?? undefined,
             groupID: undefined,
             messageID: undefined,
             storagePath: canceledPath.storagePath,

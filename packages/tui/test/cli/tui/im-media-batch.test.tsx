@@ -35,7 +35,9 @@ async function fixture(directory: string) {
           identity: null,
           blocked: null,
           kernel: state.protected ? "connected" : null,
-          ...(state.protected ? { reader: { state: "ready", displayEpoch: "current", legacyMirrorUnavailable: true } } : {}),
+          ...(state.protected
+            ? { reader: { state: "ready", displayEpoch: "current", legacyMirrorUnavailable: true } }
+            : {}),
           keyOrigin: "none",
           viewer: { memberID: "viewer" },
           ...(state.multiple
@@ -76,9 +78,16 @@ async function fixture(directory: string) {
         await state.gate
         return Response.json(receipt)
       }
-      if (url.pathname.endsWith("/groups/group")) return Response.json({ version: 1,
-        group: { ...group(directory), kernelConvID: "kr1:pending", reader: { mode: "protected", state: "pending", liveUnread: null } },
-        reader: { displayEpoch: state.detailEpoch, proofWindowMs: 1000, nextExpiryAt: null } })
+      if (url.pathname.endsWith("/groups/group"))
+        return Response.json({
+          version: 1,
+          group: {
+            ...group(directory),
+            kernelConvID: "kr1:pending",
+            reader: { mode: "protected", state: "pending", liveUnread: null },
+          },
+          reader: { displayEpoch: state.detailEpoch, proofWindowMs: 1000, nextExpiryAt: null },
+        })
       if (url.pathname.endsWith("/messages") && request.method === "POST") {
         const input = (await request.json()) as (typeof state.sends)[number]
         state.sends.push(input)
@@ -140,13 +149,30 @@ test("pending history and current send scope allow the first attachment menu wit
   const api = await fixture(dir.path)
   api.state.protected = true
   try {
-    using ui = await mountIM(dir.path, api.sdk.url, () => <DialogIMMedia client={api.client}
-      group={{ ...group(dir.path), kernelConvID: "kr1:pending", reader: { mode: "protected", state: "pending", liveUnread: null } }}
-      identity="viewer" back={() => {}} onSent={() => {}} />, 80)
+    using ui = await mountIM(
+      dir.path,
+      api.sdk.url,
+      () => (
+        <DialogIMMedia
+          client={api.client}
+          group={{
+            ...group(dir.path),
+            kernelConvID: "kr1:pending",
+            reader: { mode: "protected", state: "pending", liveUnread: null },
+          }}
+          identity="viewer"
+          back={() => {}}
+          onSent={() => {}}
+        />
+      ),
+      80,
+    )
     await ui.frame("Upload a local file")
     expect(api.state.uploads).toHaveLength(0)
     expect(api.state.sends).toHaveLength(0)
-  } finally { await api.close() }
+  } finally {
+    await api.close()
+  }
 })
 
 test("pending media menu rejects a mismatched current reader epoch without upload or send", async () => {
@@ -155,84 +181,106 @@ test("pending media menu rejects a mismatched current reader epoch without uploa
   api.state.protected = true
   api.state.detailEpoch = "other"
   try {
-    using ui = await mountIM(dir.path, api.sdk.url, () => <DialogIMMedia client={api.client}
-      group={{ ...group(dir.path), kernelConvID: "kr1:pending", reader: { mode: "protected", state: "pending", liveUnread: null } }}
-      identity="viewer" back={() => {}} onSent={() => {}} />, 80)
-    await ui.frame("File sharing is disabled or unsupported here.")
-    expect(ui.app.captureCharFrame()).not.toContain("Upload a local file")
-    expect(api.state.uploads).toHaveLength(0)
-    expect(api.state.sends).toHaveLength(0)
-  } finally { await api.close() }
-})
-
-test("actual 80-column keyboard draft uploads four files without sending; retry uses one exact ordered request", async () => {
-  await using dir = await tmpdir()
-  const api = await fixture(dir.path)
-  const delivered: string[] = []
-  try {
     using ui = await mountIM(
       dir.path,
       api.sdk.url,
       () => (
         <DialogIMMedia
           client={api.client}
-          group={group(dir.path)}
+          group={{
+            ...group(dir.path),
+            kernelConvID: "kr1:pending",
+            reader: { mode: "protected", state: "pending", liveUnread: null },
+          }}
           identity="viewer"
           back={() => {}}
-          onSent={(message) => delivered.push(message.id)}
+          onSent={() => {}}
         />
       ),
       80,
     )
-    await ui.frame("Upload a local file")
-    for (const [index, name] of ["one", "two", "three", "four"].entries()) {
-      const file = path.join(dir.path, name)
-      await Bun.write(file, name)
-      await ui.select(index ? "Add another file" : "Upload a local file")
-      await ui.frame("Path on this computer")
-      await ui.type(file)
-      ui.app.mockInput.pressEnter()
-      await ui.frame(`Remove from draft · ${name}`)
-    }
+    await ui.frame("File sharing is disabled or unsupported here.")
+    expect(ui.app.captureCharFrame()).not.toContain("Upload a local file")
     expect(api.state.uploads).toHaveLength(0)
-    expect(ui.app.captureCharFrame()).not.toContain("Add another file")
-    await ui.select("Upload selected files")
-    await until(() => api.state.uploads.length === 4, "all original multipart uploads")
-    await ui.frame("Send attachments together")
-    expect(api.state.uploads).toHaveLength(4)
     expect(api.state.sends).toHaveLength(0)
-    await ui.select("Remove from draft · two")
-    await ui.frame("Send attachments together · 3")
-    await ui.select("Message (optional)")
-    await ui.type("exact caption")
-    ui.app.mockInput.pressEnter()
-    await ui.frame("exact caption")
-    await ui.select("Send attachments together")
-    await ui.frame("Message result is unknown")
-    expect(delivered).toEqual([])
-    expect(api.state.sends).toHaveLength(1)
-    await ui.select("Retry same message")
-    await until(() => delivered.length === 1, "exact retry receipt")
-    expect(api.state.sends).toHaveLength(2)
-    expect(api.state.sends[1]).toEqual(api.state.sends[0])
-    expect(api.state.sends[0].attachmentIDs).toEqual(["attachment-1", "attachment-3", "attachment-4"])
-    expect(api.state.sends[0].content).toBe("exact caption")
-    expect(api.state.uploads).toHaveLength(4)
-    const scope = MediaIntent.scope({
-      server: api.client.scope().url,
-      directory: dir.path,
-      workspaceID: dir.path,
-      groupID: "group",
-      memberID: "viewer",
-    })
-    const records = await createMediaBatchStore(path.join(dir.path, "state")).list(scope)
-    expect(records).toHaveLength(1)
-    expect(records[0].phase).toBe("bound")
-    expect(records[0].messageID).toBe("message")
   } finally {
     await api.close()
   }
-}, 10000)
+})
+
+test(
+  "actual 80-column keyboard draft uploads four files without sending; retry uses one exact ordered request",
+  async () => {
+    await using dir = await tmpdir()
+    const api = await fixture(dir.path)
+    const delivered: string[] = []
+    try {
+      using ui = await mountIM(
+        dir.path,
+        api.sdk.url,
+        () => (
+          <DialogIMMedia
+            client={api.client}
+            group={group(dir.path)}
+            identity="viewer"
+            back={() => {}}
+            onSent={(message) => delivered.push(message.id)}
+          />
+        ),
+        80,
+      )
+      await ui.frame("Upload a local file")
+      for (const [index, name] of ["one", "two", "three", "four"].entries()) {
+        const file = path.join(dir.path, name)
+        await Bun.write(file, name)
+        await ui.select(index ? "Add another file" : "Upload a local file")
+        await ui.frame("Path on this computer")
+        await ui.type(file)
+        ui.app.mockInput.pressEnter()
+        await ui.frame(`Remove from draft · ${name}`)
+      }
+      expect(api.state.uploads).toHaveLength(0)
+      expect(ui.app.captureCharFrame()).not.toContain("Add another file")
+      await ui.select("Upload selected files")
+      await until(() => api.state.uploads.length === 4, "all original multipart uploads")
+      await ui.frame("Send attachments together")
+      expect(api.state.uploads).toHaveLength(4)
+      expect(api.state.sends).toHaveLength(0)
+      await ui.select("Remove from draft · two")
+      await ui.frame("Send attachments together · 3")
+      await ui.select("Message (optional)")
+      await ui.type("exact caption")
+      ui.app.mockInput.pressEnter()
+      await ui.frame("exact caption")
+      await ui.frame("Send attachments together")
+      await ui.select("Send attachments together")
+      await ui.frame("Message result is unknown")
+      expect(delivered).toEqual([])
+      expect(api.state.sends).toHaveLength(1)
+      await ui.select("Retry same message")
+      await until(() => delivered.length === 1, "exact retry receipt")
+      expect(api.state.sends).toHaveLength(2)
+      expect(api.state.sends[1]).toEqual(api.state.sends[0])
+      expect(api.state.sends[0].attachmentIDs).toEqual(["attachment-1", "attachment-3", "attachment-4"])
+      expect(api.state.sends[0].content).toBe("exact caption")
+      expect(api.state.uploads).toHaveLength(4)
+      const scope = MediaIntent.scope({
+        server: api.client.scope().url,
+        directory: dir.path,
+        workspaceID: dir.path,
+        groupID: "group",
+        memberID: "viewer",
+      })
+      const records = await createMediaBatchStore(path.join(dir.path, "state")).list(scope)
+      expect(records).toHaveLength(1)
+      expect(records[0].phase).toBe("bound")
+      expect(records[0].messageID).toBe("message")
+    } finally {
+      await api.close()
+    }
+  },
+  process.platform === "win32" ? 180_000 : 10000,
+)
 
 test("cold sending reads as unknown without dispatch; the original private store rejects a stale writer", async () => {
   await using dir = await tmpdir()
@@ -297,46 +345,50 @@ test("cold sending reads as unknown without dispatch; the original private store
   }
 })
 
-test("actual keyboard cancel stops the pending multipart batch and preserves an unknown upload without a message", async () => {
-  await using dir = await tmpdir()
-  const api = await fixture(dir.path)
-  const gate = Promise.withResolvers<void>()
-  api.state.gate = gate.promise
-  try {
-    using ui = await mountIM(
-      dir.path,
-      api.sdk.url,
-      () => (
-        <DialogIMMedia
-          client={api.client}
-          group={group(dir.path)}
-          identity="viewer"
-          back={() => {}}
-          onSent={() => {
-            throw new Error("Unexpected send after upload cancel")
-          }}
-        />
-      ),
-      80,
-    )
-    await ui.frame("Upload a local file")
-    for (const [index, name] of ["first", "second"].entries()) {
-      const file = path.join(dir.path, name)
-      await Bun.write(file, name)
-      await ui.select(index ? "Add another file" : "Upload a local file")
-      await ui.type(file)
-      ui.app.mockInput.pressEnter()
-      await ui.frame(`Remove from draft · ${name}`)
+test(
+  "actual keyboard cancel stops the pending multipart batch and preserves an unknown upload without a message",
+  async () => {
+    await using dir = await tmpdir()
+    const api = await fixture(dir.path)
+    const gate = Promise.withResolvers<void>()
+    api.state.gate = gate.promise
+    try {
+      using ui = await mountIM(
+        dir.path,
+        api.sdk.url,
+        () => (
+          <DialogIMMedia
+            client={api.client}
+            group={group(dir.path)}
+            identity="viewer"
+            back={() => {}}
+            onSent={() => {
+              throw new Error("Unexpected send after upload cancel")
+            }}
+          />
+        ),
+        80,
+      )
+      await ui.frame("Upload a local file")
+      for (const [index, name] of ["first", "second"].entries()) {
+        const file = path.join(dir.path, name)
+        await Bun.write(file, name)
+        await ui.select(index ? "Add another file" : "Upload a local file")
+        await ui.type(file)
+        ui.app.mockInput.pressEnter()
+        await ui.frame(`Remove from draft · ${name}`)
+      }
+      await ui.select("Upload selected files")
+      await until(() => api.state.uploads.length === 1, "first pending original multipart")
+      await ui.select("Cancel upload")
+      await ui.frame("Upload result unknown")
+      expect(api.state.uploads).toHaveLength(1)
+      expect(api.state.sends).toHaveLength(0)
+      expect(ui.app.captureCharFrame()).not.toContain("Retry same message")
+    } finally {
+      gate.resolve()
+      await api.close()
     }
-    await ui.select("Upload selected files")
-    await until(() => api.state.uploads.length === 1, "first pending original multipart")
-    await ui.select("Cancel upload")
-    await ui.frame("Upload result unknown")
-    expect(api.state.uploads).toHaveLength(1)
-    expect(api.state.sends).toHaveLength(0)
-    expect(ui.app.captureCharFrame()).not.toContain("Retry same message")
-  } finally {
-    gate.resolve()
-    await api.close()
-  }
-})
+  },
+  process.platform === "win32" ? 90_000 : 30_000,
+)

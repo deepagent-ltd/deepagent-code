@@ -55,9 +55,10 @@ const ui = await mountIM(
   undefined,
   input.appearance ?? {},
 )
+const frame = (text: string) => ui.frame(text, process.platform === "win32" ? 30_000 : 3_000)
 const lines = createInterface({ input: process.stdin })
 try {
-  await ui.frame(input.appearance?.locale === "zh" ? "上传本机文件" : "Upload a local file")
+  await frame(input.appearance?.locale === "zh" ? "上传本机文件" : "Upload a local file")
   for (let count = 0; count < 100; count++) {
     await ui.app.renderOnce()
     if (!ui.app.captureCharFrame().includes("Loading")) break
@@ -68,7 +69,7 @@ try {
     await Bun.write(path.join(root, `${mode}-menu.txt`), ui.app.captureCharFrame())
     await Bun.write(path.join(root, `${mode}-menu.json`), JSON.stringify(ui.app.captureSpans()))
     await ui.select(input.appearance?.locale === "zh" ? "上传本机文件" : "Upload a local file")
-    await ui.frame(input.appearance?.locale === "zh" ? "这台电脑上的文件路径" : "Path on this computer")
+    await frame(input.appearance?.locale === "zh" ? "这台电脑上的文件路径" : "Path on this computer")
     await Bun.write(path.join(root, `${mode}-form.txt`), ui.app.captureCharFrame())
     await Bun.write(path.join(root, `${mode}-form.json`), JSON.stringify(ui.app.captureSpans()))
     ui.app.mockInput.pressTab()
@@ -87,12 +88,12 @@ try {
   }
   if (input.start) {
     await ui.select("Upload a local file")
-    await ui.frame("Path on this computer")
+    await frame("Path on this computer")
     await ui.type(input.source)
     ui.app.mockInput.pressEnter()
-    await ui.frame(`Remove from draft · ${path.basename(input.source)}`)
+    await frame(`Remove from draft · ${path.basename(input.source)}`)
     await ui.select("Upload selected files")
-    await ui.frame("Send attachments together")
+    await frame("Send attachments together")
     await ui.select("Send attachments together")
   }
   await Bun.write(path.join(root, `${mode}-ready.json`), JSON.stringify({ pid: process.pid }))
@@ -107,14 +108,14 @@ try {
     if (command.action === "send") await ui.select("Send attachments together")
     if (command.action === "download") {
       await ui.select("Save file")
-      await ui.frame("Save to a new path")
+      await frame("Save to a new path")
       await ui.type(command.target!)
       ui.app.mockInput.pressEnter()
-      await ui.frame("File saved and verified")
+      await frame("File saved and verified")
     }
     if (command.action === "preview") {
       await ui.select("Create temporary image link")
-      await ui.frame("Open image link")
+      await frame("Open image link")
     }
     await ui.app.renderOnce()
     await Bun.write(path.join(root, `${mode}-${command.id}.txt`), ui.app.captureCharFrame())

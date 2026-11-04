@@ -302,13 +302,17 @@ export const parse = (input: unknown) => LocalOperator.decode(PolicyFile, input)
 /** Offline policy selects configured identities, never accepts authority hashes or proof booleans.
  * This first route selector supports explicit native HTTP model configuration only. It does not
  * import provider SDKs, fetch a model catalog, or establish the independent execution proof. */
+export const rejectRetired = (policy: typeof PolicyFile.Type) =>
+  policy.version === 1 || policy.targets.some((target) => !("project" in target))
+    ? LocalOperator.failure(
+        "LOCAL_TASK_EXECUTION_UNAVAILABLE",
+        "Retired IM text-only policies cannot enroll execution capabilities",
+      )
+    : Effect.void
+
 export const resolve = Effect.fn("LocalOperatorPolicy.resolve")(function* (input: unknown, operatorID: string) {
   const policy = yield* parse(input)
-  if (policy.version === 1 || policy.targets.some((target) => !("project" in target)))
-    return yield* LocalOperator.failure(
-      "LOCAL_TASK_EXECUTION_UNAVAILABLE",
-      "Retired IM text-only policies cannot enroll execution capabilities",
-    )
+  yield* rejectRetired(policy)
   const database = yield* Database.Service
   const targets = yield* Effect.forEach(
     policy.targets,

@@ -1,4 +1,4 @@
-import { beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 import { AuthRuntime } from "../../src/im/auth-runtime"
 import { ownedSecretBuild } from "../fixture/owned-secret-build"
+import { WindowsNativeNodeCohort } from "../fixture/windows-native-node-cohort"
 import { managedBrowserInputRuntime } from "../../../desktop/scripts/managed-browser-input-runtime"
 import {
   managedBrowserInputFixtureEnvironment,
@@ -19,6 +20,10 @@ const fixture = path.resolve(import.meta.dir, "fixture/auth-runtime.ts")
 const node = Bun.which("node")!
 const password = "synthetic-é-é-🔒-\0-password"
 const hash = await Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 65_536, timeCost: 3 })
+const native: { cohort?: Awaited<ReturnType<typeof WindowsNativeNodeCohort.build>>; failed?: boolean } = {}
+afterAll(async () => {
+  if (!native.failed) await native.cohort?.dispose()
+})
 beforeAll(async () => {
   const built = await Bun.build({
     entrypoints: [fixture],
@@ -52,7 +57,9 @@ beforeAll(async () => {
   await fs.symlink(
     await fs.realpath(
       path.dirname(
-        createRequire(path.resolve(import.meta.dir, "../../../desktop/package.json")).resolve("@lydell/node-pty/package.json"),
+        createRequire(path.resolve(import.meta.dir, "../../../desktop/package.json")).resolve(
+          "@lydell/node-pty/package.json",
+        ),
       ),
     ),
     path.join(directory, "node_modules/@lydell/node-pty"),
@@ -61,12 +68,31 @@ beforeAll(async () => {
   // Match the actual Node build's external UMD dependency and its relative impl files.
   await fs.symlink(
     await fs.realpath(
-      path.dirname(createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("jsonc-parser/package.json")),
+      path.dirname(
+        createRequire(path.resolve(import.meta.dir, "../../package.json")).resolve("jsonc-parser/package.json"),
+      ),
     ),
     path.join(directory, "node_modules/jsonc-parser"),
     process.platform === "win32" ? "junction" : "dir",
   )
-})
+  if (process.platform === "win32") {
+    const runner = process.env.RUNNER_TEMP
+    const directory =
+      runner && path.win32.parse(runner).root.toUpperCase() === "D:\\"
+        ? await fs.realpath(runner)
+        : path.join(import.meta.dir, "../../../..", ".artifacts", "windows-native-node")
+    await fs.mkdir(directory, { recursive: true })
+    native.cohort = await WindowsNativeNodeCohort.acquire({
+      directory: await fs.realpath(directory),
+      nodeEntry: path.join(import.meta.dir, "fixture/auth-runtime-native.ts"),
+      assets: [
+        path.resolve(import.meta.dir, "../../src/im/auth-password-worker.node.ts"),
+        path.resolve(import.meta.dir, "../../src/location-index/typescript-index.worker.ts"),
+      ],
+      ownedSecretBackends: true,
+    })
+  }
+}, 240_000)
 
 async function run(
   mode: string,
@@ -100,26 +126,28 @@ child.on("exit", code => { clearTimeout(timer); app.exit(code ?? 1) });
 void main().catch(() => app.exit(1));
 `,
     )
-  const child = Bun.spawn(
-    desktop
-      ? [managedBrowserInputFixtureExecutable, main]
-      : [node, path.join(directory, "fixture.mjs"), mode, request, result],
-    {
-      cwd,
-      env: {
-        ...managedBrowserInputFixtureEnvironment,
-        PATH: path.dirname(node),
-        HOME: directory,
-        TMPDIR: directory,
-        TEMP: directory,
-        TMP: directory,
-        NO_COLOR: "1",
-        ...environment,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  )
+  const env = {
+    ...managedBrowserInputFixtureEnvironment,
+    PATH: path.dirname(node),
+    HOME: directory,
+    TMPDIR: directory,
+    TEMP: directory,
+    TMP: directory,
+    NO_COLOR: "1",
+    ...environment,
+  }
+  const sealed = !desktop && !!native.cohort && ["operator", "prepare-credentials", "http"].includes(mode)
+  const child = sealed
+    ? native.cohort!.spawn(path.dirname(cwd), mode, {
+        cwd,
+        env: { ...env, DAC_AUTH_REQUEST: request, DAC_AUTH_RESULT: result },
+      })
+    : Bun.spawn(
+        desktop
+          ? [managedBrowserInputFixtureExecutable, main]
+          : [node, path.join(directory, "fixture.mjs"), mode, request, result],
+        { cwd, env, stdout: "pipe", stderr: "pipe" },
+      )
   const timer = setTimeout(() => child.kill("SIGKILL"), mode === "worker-timeout" ? 45_000 : 30_000)
   const [status, stdout, stderr] = await Promise.all([
     child.exited,
@@ -127,6 +155,7 @@ void main().catch(() => app.exit(1));
     new Response(child.stderr).text(),
   ]).finally(() => clearTimeout(timer))
   await fs.writeFile(path.join(directory, `${id}.log`), stdout + stderr)
+  if (status !== 0) native.failed = true
   expect(stdout + stderr).not.toContain(hash)
   expect(stdout + stderr).not.toContain(password)
   if (environment.DEEPAGENT_CODE_SERVER_PASSWORD)
@@ -191,17 +220,31 @@ test("strict PHC and UTF-8 resource limits reject before expensive work in Bun a
 })
 
 test("normal parallel credential reads wait for bounded verification capacity in Bun and Node", async () => {
-  expect(await Promise.all([AuthRuntime.verify(password, hash), AuthRuntime.verify(password, hash), AuthRuntime.verify(password, hash)]))
-    .toEqual([true, true, true])
+  expect(
+    await Promise.all([
+      AuthRuntime.verify(password, hash),
+      AuthRuntime.verify(password, hash),
+      AuthRuntime.verify(password, hash),
+    ]),
+  ).toEqual([true, true, true])
   const result = (await run("bounded", { password, verifier: hash })).result
-  expect(result).toMatchObject({ excess: { value: true }, during: { value: true }, completed: [true, true], released: true })
+  expect(result).toMatchObject({
+    excess: { value: true },
+    during: { value: true },
+    completed: [true, true],
+    released: true,
+  })
   expect(result.ticks).toBeGreaterThan(1)
 })
 
 test("queued credential cancellation and capacity overflow do not leak verification slots", async () => {
   const result = (await run("queue-cancel", { password, verifier: hash })).result
-  expect(result).toMatchObject({ excess: { error: "LOCAL_OPERATOR_UNAVAILABLE" }, settledBeforeAbort: 0,
-    completed: [true, true], released: true })
+  expect(result).toMatchObject({
+    excess: { error: "LOCAL_OPERATOR_UNAVAILABLE" },
+    settledBeforeAbort: 0,
+    completed: [true, true],
+    released: true,
+  })
   expect(result.cancelled).toHaveLength(32)
   expect(result.cancelled.every((item: { error: string }) => item.error === "LOCAL_OPERATOR_UNAVAILABLE")).toBe(true)
 })
@@ -244,6 +287,7 @@ test("real Electron worker hard deadlines terminate stalled workers before admis
 }, 50_000)
 
 test("actual Node refuses retired enrollment and verifies Core-prepared operator credentials through the bounded backend", async () => {
+  native.failed = true
   const root = await fs.mkdtemp(path.join(directory, "operator-"))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),
@@ -315,8 +359,10 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
   const refused = await operator(enroll)
   expect(refused).toEqual({ error: "LOCAL_TASK_EXECUTION_UNAVAILABLE" })
   expect((await fs.stat(filename)).isFile()).toBe(true)
-  const rejected = new Database(`${pathToFileURL(filename).href}?immutable=1`,
-    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
+  const rejected = new Database(
+    `${pathToFileURL(filename).href}?immutable=1`,
+    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+  )
   try {
     expect(rejected.query("SELECT count(*) count FROM local_operator_authority").get()).toEqual({ count: 0 })
     expect(() => rejected.run("CREATE TABLE forbidden_observer_write (id INTEGER)")).toThrow(/readonly|read-only/i)
@@ -325,8 +371,13 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
   }
   const prepare = async () =>
     (
-      await run("prepare-credentials", enroll, false,
-        { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword }, project)
+      await run(
+        "prepare-credentials",
+        enroll,
+        false,
+        { ...environment, DEEPAGENT_CODE_SERVER_PASSWORD: firstPassword },
+        project,
+      )
     ).result
   const enrolled = await prepare()
   expect(enrolled.value.state).toBe("active")
@@ -389,8 +440,10 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
       () => false,
     ),
   ).toBe(false)
-  const database = new Database(`${pathToFileURL(filename).href}?immutable=1`,
-    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI)
+  const database = new Database(
+    `${pathToFileURL(filename).href}?immutable=1`,
+    constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+  )
   try {
     expect(() => database.run("CREATE TABLE forbidden_observer_write (id INTEGER)")).toThrow(/readonly|read-only/i)
     expect(database.query("SELECT revision,credential_generation,state FROM local_operator_authority").get()).toEqual({
@@ -408,6 +461,7 @@ test("actual Node refuses retired enrollment and verifies Core-prepared operator
   } finally {
     database.close()
   }
+  native.failed = false
 }, 100_000)
 
 test("real Node Argon2 waits within bounded capacity and retains slots until actual work completes", async () => {
@@ -441,13 +495,23 @@ test("actual Node crypto FIPS failure is typed, does not leak inputs and release
 })
 
 test("actual Node OwnedValidation resolves its executable from the fixed PATH and preserves native containment", async () => {
-  expect((await run("owned", {})).result).toEqual(process.platform === "darwin"
-    ? { state: "exited", outcome: "passed", output: "native-node-owned" }
-    : process.platform === "linux"
-      ? { state: "unknown", outcome: null, output: "native-node-owned", containment: "posix-group",
-          stopProof: "unconfirmed", reason: "containment_unconfirmed", exitCode: 0, quarantined: 1,
-          unsupportedProfile: "PROFILE_UNAVAILABLE" }
-      : { error: "PROFILE_UNAVAILABLE", dispatched: false })
+  expect((await run("owned", {})).result).toEqual(
+    process.platform === "darwin"
+      ? { state: "exited", outcome: "passed", output: "native-node-owned" }
+      : process.platform === "linux"
+        ? {
+            state: "unknown",
+            outcome: null,
+            output: "native-node-owned",
+            containment: "posix-group",
+            stopProof: "unconfirmed",
+            reason: "containment_unconfirmed",
+            exitCode: 0,
+            quarantined: 1,
+            unsupportedProfile: "PROFILE_UNAVAILABLE",
+          }
+        : { error: "PROFILE_UNAVAILABLE", dispatched: false },
+  )
 })
 
 test("actual Electron utility uses the bounded WASM worker for unsupported native Argon2", async () => {

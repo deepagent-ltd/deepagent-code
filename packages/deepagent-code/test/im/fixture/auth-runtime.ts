@@ -207,17 +207,30 @@ const result = await (async () => {
     }
   }
   if (process.argv[2] === "queue-cancel") {
-    const running = [AuthRuntime.verify(input.password, input.verifier), AuthRuntime.verify(input.password, input.verifier)]
+    const running = [
+      AuthRuntime.verify(input.password, input.verifier),
+      AuthRuntime.verify(input.password, input.verifier),
+    ]
     const controllers = Array.from({ length: 32 }, () => new AbortController())
     const progress = { settled: 0 }
-    const queued = controllers.map((controller) => outcome(AuthRuntime.verify(input.password, input.verifier, controller.signal))
-      .then((result) => { progress.settled++; return result }))
+    const queued = controllers.map((controller) =>
+      outcome(AuthRuntime.verify(input.password, input.verifier, controller.signal)).then((result) => {
+        progress.settled++
+        return result
+      }),
+    )
     const excess = await outcome(AuthRuntime.verify(input.password, input.verifier))
     const settledBeforeAbort = progress.settled
     controllers.forEach((controller) => controller.abort())
     const cancelled = await Promise.all(queued)
     const completed = await Promise.all(running)
-    return { excess, settledBeforeAbort, cancelled, completed, released: await AuthRuntime.verify(input.password, input.verifier) }
+    return {
+      excess,
+      settledBeforeAbort,
+      cancelled,
+      completed,
+      released: await AuthRuntime.verify(input.password, input.verifier),
+    }
   }
   if (process.argv[2] === "crypto-failure") {
     const { setFips, getFips } = await import("node:crypto")
@@ -242,6 +255,13 @@ const result = await (async () => {
     const credentials = await import("./operator-credentials")
     assert(input.action && input.operationID)
     const database = Database.defaultLayer
+    const native = Layer.unwrap(
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return Layer.empty
+        const { windowsStorageLayer } = yield* Effect.promise(() => import("../../../src/effect/root"))
+        return windowsStorageLayer
+      }),
+    )
     return await outcome(
       Effect.runPromise(
         (process.argv[2] === "prepare-credentials"
@@ -252,7 +272,9 @@ const result = await (async () => {
               policyPath: input.policyPath,
               expectedRevision: input.expectedRevision,
               previousCredentialPath: input.previousCredentialPath,
-            })).pipe(
+            })
+        ).pipe(
+          Effect.provide(native),
           Effect.provide(LocationIdentity.layer.pipe(Layer.provide(database), Layer.provide(FSUtil.defaultLayer))),
           Effect.provide(database),
           Effect.provide(ServerAuth.Config.defaultLayer),
@@ -302,20 +324,28 @@ const result = await (async () => {
       )
       const crossOrigin = await request(auth, "http://127.0.0.1:45124")
       const concurrent = await Promise.all([request(), request(), request()])
-      const parallelRules = await Promise.all(Array.from({ length: 3 }, () => request(auth, undefined, "/api/v1/event-validation/rules")))
+      const parallelRules = await Promise.all(
+        Array.from({ length: 3 }, () => request(auth, undefined, "/api/v1/event-validation/rules")),
+      )
       const { LocalAuthority } = await import("../../../src/installation/local-authority")
       const installation = LocalAuthority.installationPath()
       await fs.rename(installation, installation + ".temporarily-unavailable")
       const unavailableReads = await (async () => {
         try {
-          return await Promise.all([
-            "/api/v1/event-validation/rules", "/api/v1/event-investigation/rules/absent/candidates",
-            "/api/v1/event-investigation/rules/absent/reports",
-          ].map(async (pathname) => {
-            const response = await fetch(new URL(pathname, listener.url), { headers: { authorization: auth } })
-            const body: unknown = await response.json()
-            return { status: response.status, code: typeof body === "object" && body !== null && "code" in body ? body.code : null }
-          }))
+          return await Promise.all(
+            [
+              "/api/v1/event-validation/rules",
+              "/api/v1/event-investigation/rules/absent/candidates",
+              "/api/v1/event-investigation/rules/absent/reports",
+            ].map(async (pathname) => {
+              const response = await fetch(new URL(pathname, listener.url), { headers: { authorization: auth } })
+              const body: unknown = await response.json()
+              return {
+                status: response.status,
+                code: typeof body === "object" && body !== null && "code" in body ? body.code : null,
+              }
+            }),
+          )
         } finally {
           await fs.rename(installation + ".temporarily-unavailable", installation)
         }
@@ -340,7 +370,8 @@ const result = await (async () => {
     const { OwnedValidation } = await import("../../../src/deepagent/owned-validation")
     const request = {
       cwd: process.cwd(),
-      profile: process.platform === "linux" ? ("posix-process-group-v1" as const) : ("darwin-single-process-v1" as const),
+      profile:
+        process.platform === "linux" ? ("posix-process-group-v1" as const) : ("darwin-single-process-v1" as const),
       command: {
         id: "node-fixed-path",
         source: "user" as const,
@@ -351,11 +382,20 @@ const result = await (async () => {
       },
     }
     if (process.platform !== "darwin") {
-      const refused = await outcome(Effect.runPromise(OwnedValidation.prepare({
-        ...request, profile: "darwin-single-process-v1",
-      }).pipe(Effect.scoped)))
+      const refused = await outcome(
+        Effect.runPromise(
+          OwnedValidation.prepare({
+            ...request,
+            profile: "darwin-single-process-v1",
+          }).pipe(Effect.scoped),
+        ),
+      )
       assert.deepEqual(refused, { error: "PROFILE_UNAVAILABLE" })
-      assert.deepEqual(OwnedValidation.inspectCustody(), { limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT, live: 0, quarantine: 0 })
+      assert.deepEqual(OwnedValidation.inspectCustody(), {
+        limit: OwnedValidation.VALIDATION_CUSTODY_LIMIT,
+        live: 0,
+        quarantine: 0,
+      })
       if (process.platform !== "linux") return { error: "PROFILE_UNAVAILABLE", dispatched: false }
     }
     return await Effect.runPromise(
@@ -366,10 +406,17 @@ const result = await (async () => {
         if (process.platform === "linux") {
           assert.equal(observed.state, "unknown")
           assert.equal(observed.outcome, null)
-          return { state: observed.state, outcome: observed.outcome, output: observed.stdout.text,
-            containment: observed.containment, stopProof: observed.stopProof, reason: observed.reason,
-            exitCode: observed.exitCode, quarantined: OwnedValidation.inspectCustody().quarantine,
-            unsupportedProfile: "PROFILE_UNAVAILABLE" }
+          return {
+            state: observed.state,
+            outcome: observed.outcome,
+            output: observed.stdout.text,
+            containment: observed.containment,
+            stopProof: observed.stopProof,
+            reason: observed.reason,
+            exitCode: observed.exitCode,
+            quarantined: OwnedValidation.inspectCustody().quarantine,
+            unsupportedProfile: "PROFILE_UNAVAILABLE",
+          }
         }
         assert.equal(observed.outcome, "passed")
         return { state: observed.state, outcome: observed.outcome, output: observed.stdout.text }
@@ -389,4 +436,4 @@ await fs.writeFile(
     result,
   }),
 )
-if (process.argv[2] === "http" || process.versions.electron) process.exit(0)
+if ((process.argv[2] === "http" || process.versions.electron) && !process.env.DAC_AUTH_NATIVE_COHORT) process.exit(0)

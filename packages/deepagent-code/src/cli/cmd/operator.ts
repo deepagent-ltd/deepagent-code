@@ -22,7 +22,15 @@ export const OperatorCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("action", {
-        choices: ["enroll", "rotate", "revoke", "approve-route", "revoke-route", "route-history", "event-rule"] as const,
+        choices: [
+          "enroll",
+          "rotate",
+          "revoke",
+          "approve-route",
+          "revoke-route",
+          "route-history",
+          "event-rule",
+        ] as const,
         demandOption: true,
       })
       .option("request-id", { type: "string", demandOption: true, describe: "stable exact-retry operation ID" })
@@ -42,11 +50,13 @@ export const OperatorCommand = cmd({
       }),
   async handler(args) {
     const database = Database.defaultLayer
-    const native = Layer.unwrap(Effect.gen(function* () {
-      if (process.platform !== "win32") return Layer.empty
-      const { windowsStorageLayer } = yield* Effect.promise(() => import("@/effect/root"))
-      return windowsStorageLayer
-    }))
+    const native = Layer.unwrap(
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return Layer.empty
+        const { windowsStorageLayer } = yield* Effect.promise(() => import("@/effect/root"))
+        return windowsStorageLayer
+      }),
+    )
     const result = await Effect.runPromise(
       command({
         action: args.action,
@@ -65,23 +75,31 @@ export const OperatorCommand = cmd({
         Effect.provide(database),
         Effect.provide(ServerAuth.Config.defaultLayer),
         Effect.scoped,
-        Effect.tapCause((cause) => Effect.gen(function* () {
-          if (["approve-route", "revoke-route", "route-history"].includes(args.action)) {
-            const { NativeRouteCapture } = yield* Effect.promise(() => import("@/installation/native-route-capture"))
-            yield* NativeRouteCapture.reportDiagnostic("operator-command", cause)
-            return
-          }
-          const error = Option.getOrUndefined(Cause.findErrorOption(cause))
-          const known = Schema.decodeUnknownOption(LocalOperatorSchema.Error)(error)
-          yield* Effect.try({
-            try: () => process.stderr.write(`Local operator diagnostic: ${JSON.stringify({ version: 1,
-              stage: "operator-command", kind: Cause.hasInterruptsOnly(cause) ? "interrupted" : Cause.hasDies(cause) ? "defect" : "failure",
-              tag: Option.isSome(known) ? "LocalOperator.Error" : "unknown",
-              code: Option.isSome(known) ? known.value.code : "UNCLASSIFIED" })}\n`),
-            catch: () => undefined,
-          }).pipe(Effect.ignore)
-          // Reporting cannot replace the original refusal, interruption or defect.
-        }).pipe(Effect.catchCause(() => Effect.void))),
+        Effect.tapCause((cause) =>
+          Effect.gen(function* () {
+            if (["approve-route", "revoke-route", "route-history"].includes(args.action)) {
+              const { NativeRouteCapture } = yield* Effect.promise(() => import("@/installation/native-route-capture"))
+              yield* NativeRouteCapture.reportDiagnostic("operator-command", cause)
+              return
+            }
+            const error = Option.getOrUndefined(Cause.findErrorOption(cause))
+            const known = Schema.decodeUnknownOption(LocalOperatorSchema.Error)(error)
+            yield* Effect.try({
+              try: () =>
+                process.stderr.write(
+                  `Local operator diagnostic: ${JSON.stringify({
+                    version: 1,
+                    stage: "operator-command",
+                    kind: Cause.hasInterruptsOnly(cause) ? "interrupted" : Cause.hasDies(cause) ? "defect" : "failure",
+                    tag: Option.isSome(known) ? "LocalOperator.Error" : "unknown",
+                    code: Option.isSome(known) ? known.value.code : "UNCLASSIFIED",
+                  })}\n`,
+                ),
+              catch: () => undefined,
+            }).pipe(Effect.ignore)
+            // Reporting cannot replace the original refusal, interruption or defect.
+          }).pipe(Effect.catchCause(() => Effect.void)),
+        ),
         Effect.catchCause(() => Effect.succeed(undefined)),
       ),
     )
@@ -112,11 +130,6 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
   if (!ServerAuth.required(config) || Option.isNone(config.password))
     return yield* LocalOperator.failure("LOCAL_OPERATOR_UNAVAILABLE", "A configured server password is required")
   const password = config.password.value
-  const installation = yield* input.action === "enroll"
-    ? LocalAuthority.initializeInstallation()
-    : LocalAuthority.readInstallation
-  const runtime = LocalAuthority.binding(installation, config.username, password)
-  const db = (yield* Database.Service).db
   const policy = input.policyPath
     ? yield* Effect.tryPromise({
         try: () => fs.readFile(input.policyPath!, "utf8"),
@@ -127,6 +140,15 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
   if (input.action === "enroll") {
     if (!policy)
       return yield* LocalOperator.failure("LOCAL_OPERATOR_INVALID", "Enrollment requires an explicit target policy")
+    const { LocalOperatorPolicy } = yield* Effect.promise(() => import("@/im/local-operator-policy"))
+    yield* LocalOperatorPolicy.rejectRetired(yield* LocalOperatorPolicy.parse(policy))
+  }
+  const installation = yield* input.action === "enroll"
+    ? LocalAuthority.initializeInstallation()
+    : LocalAuthority.readInstallation
+  const runtime = LocalAuthority.binding(installation, config.username, password)
+  const db = (yield* Database.Service).db
+  if (input.action === "enroll") {
     const operatorID = `operator_${createHmac("sha256", Buffer.from(installation.secret, "hex")).update(`enroll:${input.operationID}`).digest("hex").slice(0, 32)}`
     const resolved = yield* resolvePolicy(policy, operatorID)
     const verifier = yield* credential(() => AuthRuntime.hash(password))
@@ -182,24 +204,45 @@ export const command = Effect.fn("Cli.operator")(function* (input: {
     input.action !== "rotate",
   )
   if (input.action === "event-rule") {
-    if (current.revision !== input.expectedRevision) return yield* LocalOperator.failure("LOCAL_OPERATOR_REVISION_CONFLICT", "Operator revision changed")
-    const { EventWorkRuleSchema } = yield* Effect.promise(() => import("@deepagent-code/core/deepagent/event-work-rule.schema"))
+    if (current.revision !== input.expectedRevision)
+      return yield* LocalOperator.failure("LOCAL_OPERATOR_REVISION_CONFLICT", "Operator revision changed")
+    const { EventWorkRuleSchema } = yield* Effect.promise(
+      () => import("@deepagent-code/core/deepagent/event-work-rule.schema"),
+    )
     const { EventWorkRule } = yield* Effect.promise(() => import("@deepagent-code/core/deepagent/event-work-rule"))
-    const value = yield* Effect.tryPromise({ try: async () => {
-      if (!input.eventRuleCommandPath) throw new Error("missing")
-      const file = await fs.open(input.eventRuleCommandPath, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try {
-        const stat = await file.stat()
-        if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > 65_536 || stat.nlink !== 1) throw new Error("private rule command required")
-        return new TextDecoder("utf-8", { fatal: true }).decode(await file.readFile())
-      } finally { await file.close() }
-    }, catch: () => new LocalOperatorSchema.Error({ code: "LOCAL_OPERATOR_INVALID", message: "Private rule command is unavailable" }) })
+    const value = yield* Effect.tryPromise({
+      try: async () => {
+        if (!input.eventRuleCommandPath) throw new Error("missing")
+        const file = await fs.open(input.eventRuleCommandPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+        try {
+          const stat = await file.stat()
+          if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > 65_536 || stat.nlink !== 1)
+            throw new Error("private rule command required")
+          return new TextDecoder("utf-8", { fatal: true }).decode(await file.readFile())
+        } finally {
+          await file.close()
+        }
+      },
+      catch: () =>
+        new LocalOperatorSchema.Error({
+          code: "LOCAL_OPERATOR_INVALID",
+          message: "Private rule command is unavailable",
+        }),
+    })
     const command = yield* LocalOperator.decode(Schema.fromJsonString(EventWorkRuleSchema.Command), value)
-    const result = yield* LocalAuthority.provide({ runtime, witness },
-      EventWorkRule.command(db, { ...command, requestID: input.operationID }))
-    return { ruleID: result.rule.ruleID, revision: result.rule.revision, epoch: result.rule.epoch,
-      state: result.rule.state, expiresAt: result.rule.expiresAt, replayed: result.replayed,
-      invalidatedSessionIDs: result.interruptedSessionIDs }
+    const result = yield* LocalAuthority.provide(
+      { runtime, witness },
+      EventWorkRule.command(db, { ...command, requestID: input.operationID }),
+    )
+    return {
+      ruleID: result.rule.ruleID,
+      revision: result.rule.revision,
+      epoch: result.rule.epoch,
+      state: result.rule.state,
+      expiresAt: result.rule.expiresAt,
+      replayed: result.replayed,
+      invalidatedSessionIDs: result.interruptedSessionIDs,
+    }
   }
   if (input.action === "approve-route" || input.action === "revoke-route" || input.action === "route-history") {
     if (
@@ -289,11 +332,35 @@ const privateCredential = (filename: string | undefined) =>
       const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW)
       try {
         const stat = await file.stat()
-        if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > 8192 || stat.nlink !== 1)
+        if (
+          !stat.isFile() ||
+          (process.platform !== "win32" && (stat.mode & 0o077) !== 0) ||
+          stat.size > 8192 ||
+          stat.nlink !== 1
+        )
           throw new Error("private credential required")
-        const value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
-          .decode(await file.readFile())
-          .replace(/\r?\n$/, "")
+        if (process.platform === "win32") {
+          const { WindowsPrivate } = await import("@deepagent-code/core/im/windows-private")
+          await WindowsPrivate.verify([{ file: filename, directory: false, created: false }])
+        }
+        const bytes = await file.readFile()
+        const after = await file.stat()
+        const named = await fs.lstat(filename)
+        if (
+          after.dev !== stat.dev ||
+          after.ino !== stat.ino ||
+          after.size !== stat.size ||
+          after.mtimeMs !== stat.mtimeMs ||
+          after.ctimeMs !== stat.ctimeMs ||
+          named.dev !== after.dev ||
+          named.ino !== after.ino
+        )
+          throw new Error("private credential changed")
+        if (process.platform === "win32") {
+          const { WindowsPrivate } = await import("@deepagent-code/core/im/windows-private")
+          await WindowsPrivate.verify([{ file: filename, directory: false, created: false }])
+        }
+        const value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes).replace(/\r?\n$/, "")
         if (!value) throw new Error("empty")
         return value
       } finally {

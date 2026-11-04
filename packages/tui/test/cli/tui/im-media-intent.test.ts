@@ -2,6 +2,7 @@ import { expect, test, spyOn } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { MediaIntent } from "@deepagent-code/core/im/media-intent"
+import { WindowsPrivate } from "@deepagent-code/core/im/windows-private"
 import { createMediaIntentStore } from "../../../src/util/im-media-intent"
 import { readMediaFile, publishMediaFile } from "../../../src/component/im-media"
 import { tmpdir } from "../../fixture/fixture"
@@ -102,10 +103,12 @@ test("actual private store commits before dispatch and rejects concurrent stale 
   expect(reopened).toHaveLength(1)
   expect(MediaIntent.observedPhase(reopened[0])).toBe("upload_outcome_unknown")
   expect(reopened[0].requestID).toBe(record.requestID)
-  expect((await fs.stat(path.join(dir.path, "im-media-v1", "records.json"))).mode & 0o777).toBe(0o600)
+  const stored = path.join(dir.path, "im-media-v1", "records.json")
+  if (process.platform === "win32") await WindowsPrivate.verify([{ file: stored, directory: false, created: false }])
+  if (process.platform !== "win32") expect((await fs.stat(stored)).mode & 0o777).toBe(0o600)
   await fs.writeFile(path.join(dir.path, "blocked"), "not a directory")
   await expect(createMediaIntentStore(path.join(dir.path, "blocked")).put(record)).rejects.toThrow()
-})
+}, 30_000)
 
 test("real file reader rejects symlinks/oversize and atomic publish never replaces a file or symlink", async () => {
   await using dir = await tmpdir()

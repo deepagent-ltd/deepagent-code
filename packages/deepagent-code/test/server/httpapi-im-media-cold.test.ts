@@ -2,13 +2,14 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
+import { createRequire } from "node:module"
 import { Database } from "bun:sqlite"
 import { MediaIntent } from "@deepagent-code/core/im/media-intent"
 import { MediaBatch } from "@deepagent-code/core/im/media-batch"
 
 const fixture = path.resolve(import.meta.dir, "../fixture/im-media-cold-host.ts")
 const wait = async <T>(read: () => Promise<T | undefined>, description: string) => {
-  const end = Date.now() + 25_000
+  const end = Date.now() + (process.platform === "win32" ? 60_000 : 25_000)
   while (Date.now() < end) {
     const value = await read()
     if (value !== undefined) return value
@@ -28,6 +29,7 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
     )
     const environment = {
       PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
       HOME: path.join(root, "home"),
       TMPDIR: path.join(root, "tmp"),
       XDG_CONFIG_HOME: path.join(root, "config"),
@@ -54,8 +56,11 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
         [
           process.execPath,
           "--conditions=browser",
+          ...(process.platform === "win32"
+            ? ["--preload", path.resolve(import.meta.dir, "../fixture/source-empty-settings-preload.ts")]
+            : []),
           "--preload",
-          path.resolve(import.meta.dir, "../../../tui/node_modules/@opentui/solid/scripts/preload.js"),
+          createRequire(path.resolve(import.meta.dir, "../../../tui/package.json")).resolve("@opentui/solid/preload"),
           fixture,
           root,
           name,
@@ -75,9 +80,10 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
         const child = children.findLast((item) => item.name === name)?.child
         if (child && (child.exitCode !== null || child.signalCode !== null))
           throw new Error(`Fixture ${name} exited before ready`)
-        return (await Bun.file(path.join(root, `${name}-ready.json`)).exists())
-          ? ((await Bun.file(path.join(root, `${name}-ready.json`)).json()) as { url: string; pid: number })
-          : undefined
+        const ready = Bun.file(path.join(root, `${name}-ready.json`))
+        if (!(await ready.exists())) return undefined
+        const text = await ready.text()
+        return text ? (JSON.parse(text) as { url: string; pid: number }) : undefined
       }, `${name} ready`)
     }
     const gate = Promise.withResolvers<void>()
@@ -180,7 +186,7 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
         live.child.exited.then(() => {
           throw new Error("TUI exited before controlled ACK window")
         }),
-        Bun.sleep(25_000).then(() => {
+        Bun.sleep(process.platform === "win32" ? 60_000 : 25_000).then(() => {
           throw new Error("TUI did not reach controlled ACK window")
         }),
       ])
@@ -190,13 +196,12 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
       const before = MediaIntent.records(await Bun.file(journal).json())
       expect(before).toHaveLength(1)
       expect(MediaIntent.observedPhase(before[0])).toBe(
-        scenario === "upload-lost"
-          ? "upload_outcome_unknown"
-          : "uploaded_unbound",
+        scenario === "upload-lost" ? "upload_outcome_unknown" : "uploaded_unbound",
       )
       const batchJournal = path.join(root, "client/state/im-media-v1/batches.json")
       const beforeBatches = (await Bun.file(batchJournal).exists())
-        ? MediaBatch.records(await Bun.file(batchJournal).json()) : []
+        ? MediaBatch.records(await Bun.file(batchJournal).json())
+        : []
       expect(beforeBatches).toHaveLength(scenario === "upload-lost" ? 0 : 1)
       if (beforeBatches[0]) {
         expect(MediaBatch.observedPhase(beforeBatches[0])).toBe(
@@ -241,7 +246,9 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
         expect(frame).toContain("Upload result unknown")
         expect(frame).not.toContain("Retry same message")
       } else {
-        cold.child.stdin.write(JSON.stringify({ action: scenario === "uploaded-before-send" ? "send" : "retry", id: "retry" }) + "\n")
+        cold.child.stdin.write(
+          JSON.stringify({ action: scenario === "uploaded-before-send" ? "send" : "retry", id: "retry" }) + "\n",
+        )
         await wait(
           async () => ((await Bun.file(path.join(root, "cold-sent.json")).exists()) ? true : undefined),
           "exact retry receipt",
@@ -264,7 +271,22 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
       expect(snapshot().providers).toBe(0)
       await Bun.write(
         path.join(root, "result.json"),
-        JSON.stringify({ scenario, initial, final: snapshot(), requests: state.calls, fixtureDevMint: false, currentMediaBatchFlow: true, originalDBIdentity: { dev: originalDB.dev.toString(), ino: originalDB.ino.toString() }, coldDBIdentity: { dev: coldDB.dev.toString(), ino: coldDB.ino.toString() }, originalUploadRecord: before[0], originalBatch: beforeBatches[0] }, null, 2),
+        JSON.stringify(
+          {
+            scenario,
+            initial,
+            final: snapshot(),
+            requests: state.calls,
+            fixtureDevMint: false,
+            currentMediaBatchFlow: true,
+            originalDBIdentity: { dev: originalDB.dev.toString(), ino: originalDB.ino.toString() },
+            coldDBIdentity: { dev: coldDB.dev.toString(), ino: coldDB.ino.toString() },
+            originalUploadRecord: before[0],
+            originalBatch: beforeBatches[0],
+          },
+          null,
+          2,
+        ),
       )
     } finally {
       gate.resolve()
@@ -279,5 +301,5 @@ test.each(["upload-lost", "uploaded-before-send", "send-lost"])(
       console.info("IM_MEDIA_COLD_EVIDENCE", scenario, root)
     }
   },
-  100_000,
+  process.platform === "win32" ? 240_000 : 100_000,
 )

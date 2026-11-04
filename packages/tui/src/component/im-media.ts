@@ -4,6 +4,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { AttachmentPreview } from "@deepagent-code/core/im/attachment-preview"
 import { MediaIntent } from "@deepagent-code/core/im/media-intent"
+import { WindowsPrivate } from "@deepagent-code/core/im/windows-private"
 import type { FileHandle } from "node:fs/promises"
 
 export type MediaFileStream = {
@@ -79,11 +80,21 @@ export async function publishMediaFile(
   signal: AbortSignal,
   current: () => boolean = () => true,
 ) {
-  return publishMediaStream(filename, {
-    ...attachment,
-    body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close() } }),
-    seal: async () => {},
-  }, signal, current)
+  return publishMediaStream(
+    filename,
+    {
+      ...attachment,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes)
+          controller.close()
+        },
+      }),
+      seal: async () => {},
+    },
+    signal,
+    current,
+  )
 }
 
 export async function publishMediaStream(
@@ -93,7 +104,9 @@ export async function publishMediaStream(
   current: () => boolean = () => true,
 ) {
   const reader = source.body.getReader()
-  const abort = () => { void reader.cancel().catch(() => undefined) }
+  const abort = () => {
+    void reader.cancel().catch(() => undefined)
+  }
   signal.addEventListener("abort", abort, { once: true })
   const live = () => {
     signal.throwIfAborted()
@@ -104,9 +117,15 @@ export async function publishMediaStream(
   let handle: FileHandle | undefined
   try {
     live()
-    if (!filename.trim() || /[\x00-\x1f\x7f-\x9f]/.test(filename) ||
-        !Number.isSafeInteger(source.sizeBytes) || source.sizeBytes < 0 || source.sizeBytes > AttachmentPreview.maxBytes ||
-        !/^[a-f0-9]{64}$/.test(source.checksum) || !Number.isSafeInteger(source.expiresAt))
+    if (
+      !filename.trim() ||
+      /[\x00-\x1f\x7f-\x9f]/.test(filename) ||
+      !Number.isSafeInteger(source.sizeBytes) ||
+      source.sizeBytes < 0 ||
+      source.sizeBytes > AttachmentPreview.maxBytes ||
+      !/^[a-f0-9]{64}$/.test(source.checksum) ||
+      !Number.isSafeInteger(source.expiresAt)
+    )
       throw new Error("media_file_invalid")
     const parent = await fs.realpath(path.dirname(path.resolve(filename)))
     const original = await fs.lstat(parent)
@@ -116,8 +135,11 @@ export async function publishMediaStream(
     temporary = { directory, filename: path.join(directory, "body.part"), dev: owned.dev, ino: owned.ino }
     // mkdtemp creates an owner-only directory; the body itself is never executable.
     await fs.chmod(directory, 0o700)
+    if (process.platform === "win32") await WindowsPrivate.verify([{ file: directory, directory: true, created: true }])
     handle = await fs.open(temporary.filename, "wx", 0o600)
     const opened = await handle.stat()
+    if (process.platform === "win32")
+      await WindowsPrivate.verify([{ file: temporary.filename, directory: false, created: false }])
     const digest = createHash("sha256")
     const prefix = new Uint8Array(24)
     const buffer = new Uint8Array(Math.min(65536, Math.max(1, source.sizeBytes)))
@@ -128,11 +150,11 @@ export async function publishMediaStream(
       live()
       if (chunk.done) break
       if (offset + chunk.value.byteLength > source.sizeBytes) throw new Error("media_size_invalid")
-      for (let written = 0; written < chunk.value.byteLength;) {
+      for (let written = 0; written < chunk.value.byteLength; ) {
         const length = Math.min(buffer.length, chunk.value.byteLength - written)
         buffer.set(chunk.value.subarray(written, written + length))
         if (offset < prefix.length) prefix.set(buffer.subarray(0, Math.min(length, prefix.length - offset)), offset)
-        for (let stored = 0; stored < length;) {
+        for (let stored = 0; stored < length; ) {
           live()
           const result = await handle.write(buffer, stored, length - stored, offset + stored)
           if (!result.bytesWritten) throw new Error("media_write_failed")
@@ -143,9 +165,13 @@ export async function publishMediaStream(
         offset += length
       }
     }
-    if (offset !== source.sizeBytes || digest.digest("hex") !== source.checksum ||
-        (source.mime && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(source.mime) &&
-          AttachmentPreview.mime(prefix.subarray(0, Math.min(prefix.length, offset))) !== source.mime))
+    if (
+      offset !== source.sizeBytes ||
+      digest.digest("hex") !== source.checksum ||
+      (source.mime &&
+        ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(source.mime) &&
+        AttachmentPreview.mime(prefix.subarray(0, Math.min(prefix.length, offset))) !== source.mime)
+    )
       throw new Error("media_integrity_failed")
     await handle.sync()
     const written = await handle.stat({ bigint: true })
@@ -159,12 +185,29 @@ export async function publishMediaStream(
     const folder = await fs.lstat(directory)
     const actualParent = await fs.lstat(parent)
     const sealed = await handle.stat({ bigint: true })
-    if (!file.isFile() || file.size !== source.sizeBytes || (file.mode & 0o777) !== 0o600 || !sameInode(opened, file) ||
-        !named.isFile() || !sameInode(file, named) || !folder.isDirectory() || !sameInode(owned, folder) ||
-        (folder.mode & 0o777) !== 0o700 || !actualParent.isDirectory() || !sameInode(original, actualParent) ||
-        await fs.realpath(path.dirname(path.resolve(filename))) !== parent ||
-        written.size !== sealed.size || written.mtimeNs !== sealed.mtimeNs || written.ctimeNs !== sealed.ctimeNs)
+    if (
+      !file.isFile() ||
+      file.size !== source.sizeBytes ||
+      (process.platform !== "win32" && (file.mode & 0o777) !== 0o600) ||
+      !sameInode(opened, file) ||
+      !named.isFile() ||
+      !sameInode(file, named) ||
+      !folder.isDirectory() ||
+      !sameInode(owned, folder) ||
+      (process.platform !== "win32" && (folder.mode & 0o777) !== 0o700) ||
+      !actualParent.isDirectory() ||
+      !sameInode(original, actualParent) ||
+      (await fs.realpath(path.dirname(path.resolve(filename)))) !== parent ||
+      written.size !== sealed.size ||
+      written.mtimeNs !== sealed.mtimeNs ||
+      written.ctimeNs !== sealed.ctimeNs
+    )
       throw new Error("media_file_changed")
+    if (process.platform === "win32")
+      await WindowsPrivate.verify([
+        { file: temporary.filename, directory: false, created: false },
+        { file: directory, directory: true, created: false },
+      ])
     live()
     const target = path.join(parent, path.basename(path.resolve(filename)))
     // link is a pathname operation. Post-link checks and compensation are needed;
@@ -175,11 +218,19 @@ export async function publishMediaStream(
       const published = await fs.lstat(target)
       const publishedParent = await fs.lstat(parent)
       const publishedFile = await handle.stat({ bigint: true })
-      if (!published.isFile() || !sameInode(file, published) || published.size !== source.sizeBytes ||
-          !publishedParent.isDirectory() || !sameInode(original, publishedParent) ||
-          await fs.realpath(path.dirname(path.resolve(filename))) !== parent ||
-          sealed.size !== publishedFile.size || sealed.mtimeNs !== publishedFile.mtimeNs)
+      if (
+        !published.isFile() ||
+        !sameInode(file, published) ||
+        published.size !== source.sizeBytes ||
+        !publishedParent.isDirectory() ||
+        !sameInode(original, publishedParent) ||
+        (await fs.realpath(path.dirname(path.resolve(filename)))) !== parent ||
+        sealed.size !== publishedFile.size ||
+        sealed.mtimeNs !== publishedFile.mtimeNs
+      )
         throw new Error("media_file_changed")
+      if (process.platform === "win32")
+        await WindowsPrivate.verify([{ file: target, directory: false, created: false }])
       live()
     } catch (error: unknown) {
       if (!rollbackMediaPublication(target, parent, original, file)) throw new MediaPublicationError(error)
@@ -195,7 +246,13 @@ export async function publishMediaStream(
       await fs.unlink(temporary.filename)
     if (temporary && sameInode(temporary, await fs.lstat(temporary.directory).catch(() => undefined)))
       await fs.rmdir(temporary.directory).catch((error: unknown) => {
-        if (error && typeof error === "object" && "code" in error && ["ENOENT", "ENOTEMPTY"].includes(String(error.code))) return
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          ["ENOENT", "ENOTEMPTY"].includes(String(error.code))
+        )
+          return
         throw error
       })
   }
@@ -225,4 +282,3 @@ function rollbackMediaPublication(
     return false
   }
 }
-

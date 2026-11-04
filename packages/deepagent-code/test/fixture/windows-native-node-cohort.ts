@@ -16,6 +16,7 @@ import {
   withWindowsNativePublisherHost,
 } from "../../script/build-windows-native-bootstrap"
 import { prepareTestNativePublisher } from "../../../desktop/scripts/test-native-publisher"
+import { ownedSecretBuild } from "./owned-secret-build"
 
 const repository = path.resolve(import.meta.dir, "../../../..")
 const mainEntry = path.join(import.meta.dir, "windows-native-node-main.ts")
@@ -27,6 +28,8 @@ const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest(
 export async function build(input: {
   directory: string
   nodeEntry: string
+  assets?: readonly string[]
+  ownedSecretBackends?: boolean
   tamper?: { field: "runtime" | "executable"; sha256: string }
 }) {
   if (process.platform !== "win32" || !["x64", "arm64"].includes(process.arch))
@@ -57,6 +60,8 @@ export async function build(input: {
         privateKeyFile: publisher.privateKeyFile,
         publicKeyFile: publisher.publicKeyFile,
         toolchain,
+        assets: input.assets,
+        ownedSecretBackends: input.ownedSecretBackends,
         tamper: input.tamper,
       }),
       { flag: "wx", mode: 0o600 },
@@ -182,6 +187,8 @@ async function assemble(input: {
   privateKeyFile: string
   publicKeyFile: string
   toolchain: Awaited<ReturnType<typeof captureToolchain>>
+  assets?: readonly string[]
+  ownedSecretBackends?: boolean
   tamper?: { field: "runtime" | "executable"; sha256: string }
 }) {
   const chunks = path.join(input.root, "main", "chunks")
@@ -254,10 +261,21 @@ async function assemble(input: {
     format: "esm",
     conditions: ["node"],
     external: ["@lydell/node-pty", "jsonc-parser", "bun"],
+    plugins: input.ownedSecretBackends ? [ownedSecretBuild] : [],
     define: { ...defines, DEEPAGENT_CODE_NATIVE_COMPONENT_MANIFEST: JSON.stringify(text) },
     files: { "deepagent-code-web-ui.gen.ts": "" },
   })
   assert(compiled.success, compiled.logs.map((item) => item.message).join("\n"))
+  for (const asset of input.assets ?? []) {
+    const built = await Bun.build({
+      entrypoints: [asset],
+      outdir: chunks,
+      naming: path.basename(asset).replace(/\.ts$/, ".js"),
+      target: "node",
+      format: "esm",
+    })
+    assert(built.success, built.logs.map((item) => item.message).join("\n"))
+  }
   for (const entry of components.components.filter((entry) => !entry.path.startsWith("packages/work-file-helper/bin/")))
     assert.equal(
       digest(await fs.readFile(path.join(repository, entry.path))),

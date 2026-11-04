@@ -18,7 +18,11 @@ import { TuiConfigProvider } from "../../src/config"
 import { ToastProvider } from "../../src/ui/toast"
 import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../src/keymap"
 
-export async function until(predicate: () => boolean, message = "condition", timeout = 3000) {
+export async function until(
+  predicate: () => boolean,
+  message = "condition",
+  timeout = process.platform === "win32" ? 60_000 : 3000,
+) {
   const start = Date.now()
   while (!predicate()) {
     if (Date.now() - start > timeout) throw new Error(`Timed out: ${message}`)
@@ -90,7 +94,7 @@ export async function mountIM(
   const app = await testRender(() => <Harness />, { width, height: 40, kittyKeyboard: true })
   return {
     app,
-    async frame(text: string) {
+    async frame(text: string, timeout = process.platform === "win32" ? 30_000 : 3000) {
       const start = Date.now()
       for (;;) {
         await app.renderOnce()
@@ -99,7 +103,7 @@ export async function mountIM(
           await app.renderOnce()
           return app.captureCharFrame()
         }
-        if (Date.now() - start > 3000) throw new Error(`Missing frame text: ${text}\n${app.captureCharFrame()}`)
+        if (Date.now() - start > timeout) throw new Error(`Missing frame text: ${text}\n${app.captureCharFrame()}`)
         await Bun.sleep(10)
       }
     },
@@ -127,7 +131,10 @@ export async function mountIM(
       const nodes = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(nodes)]
       const target = nodes(app.renderer.root).find((node) => node.id === JSON.stringify(value))
       if (!target?.parent) throw new Error(`Missing rendered menu option: ${value}`)
-      const index = target.parent.getChildren().filter((node) => node.id.startsWith('"')).indexOf(target)
+      const index = target.parent
+        .getChildren()
+        .filter((node) => node.id.startsWith('"'))
+        .indexOf(target)
       if (index < 0) throw new Error(`Missing rendered menu position: ${value}`)
       app.mockInput.pressKey("HOME")
       await app.renderOnce()
