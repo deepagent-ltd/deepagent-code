@@ -93,17 +93,17 @@ async function collect(directory: string, label: string, process: CallbackProces
 async function wait(directory: string, file: string, process: CallbackProcess) {
   const deadline = Date.now() + 30000
   for (;;) {
-    if (process.child.exitCode !== null)
-      throw new Error(`Callback child exited ${process.child.exitCode}: ${await process.stderr}`)
-    if (Date.now() > deadline) throw new Error(`Callback barrier timed out: ${file}`)
-    // The child publishes the path with fs.writeFile before its JSON bytes are complete; an
-    // empty or partial read is not a result yet.
+    // The child publishes the path with fs.writeFile before its JSON bytes are complete and may
+    // exit immediately after the last write; read first so a completed barrier wins the race.
     const text = await fs.readFile(path.join(directory, file), "utf8").catch(() => undefined)
     if (text !== undefined) {
       try {
         return JSON.parse(text)
       } catch {}
     }
+    if (process.child.exitCode !== null)
+      throw new Error(`Callback child exited ${process.child.exitCode}: ${await process.stderr}`)
+    if (Date.now() > deadline) throw new Error(`Callback barrier timed out: ${file}`)
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
