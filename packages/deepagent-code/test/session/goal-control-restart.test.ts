@@ -83,7 +83,7 @@ for (const scenario of ["paused", "unknown", "wake-before", "wake-after"] as con
       }
       last.kill("SIGKILL")
       await last.exited
-      const db = new Database(path.join(root, "authority.sqlite"), { readonly: true })
+      const db = await openAuthority(path.join(root, "authority.sqlite"))
       expect(db.query("SELECT count(*) AS count FROM session_input").get()).toEqual({ count: 0 })
       expect(db.query("SELECT count(*) AS count FROM session_provider_attempt").get()).toEqual({ count: 0 })
       expect(db.query("SELECT count(*) AS count FROM session").get()).toEqual({ count: 1 })
@@ -114,5 +114,21 @@ async function removeRoot(root: string, left = 30): Promise<void> {
     Bun.gc(true)
     await Bun.sleep(100)
     return removeRoot(root, left - 1)
+  }
+}
+
+async function openAuthority(filename: string, left = 30): Promise<Database> {
+  try {
+    const db = new Database(filename, { readonly: true })
+    // Opening is lazy; the probe read surfaces the transient post-SIGKILL file state.
+    db.query("SELECT count(*) AS count FROM sqlite_master").get()
+    return db
+  } catch (error) {
+    const transient = typeof error === "object" && error !== null && "code" in error &&
+      /^SQLITE_IOERR|^SQLITE_BUSY|^EBUSY/.test(String(error.code))
+    if (!transient || left <= 1) throw error
+    Bun.gc(true)
+    await Bun.sleep(100)
+    return openAuthority(filename, left - 1)
   }
 }
