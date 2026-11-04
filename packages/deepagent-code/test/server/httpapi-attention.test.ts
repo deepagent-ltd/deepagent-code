@@ -1,6 +1,8 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { expect, test } from "bun:test"
 import path from "node:path"
+import os from "node:os"
+import fs from "node:fs/promises"
 import { Effect, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
@@ -18,6 +20,21 @@ import { AttentionGroup } from "@deepagent-code/server/groups/attention"
 import { createAttentionHandler } from "@deepagent-code/server/handlers/attention"
 import { Authorization, authorizationLayer } from "@deepagent-code/server/middleware/authorization"
 import { SchemaErrorMiddleware, schemaErrorLayer } from "@deepagent-code/server/middleware/schema-error"
+import { WindowsNativeCliCohort } from "../fixture/windows-native-cli-cohort"
+import { afterAll, beforeAll } from "bun:test"
+
+const state: { cohort?: Awaited<ReturnType<typeof WindowsNativeCliCohort.build>> } = {}
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const directory = path.join(process.env.RUNNER_TEMP ?? path.resolve(import.meta.dir, "../../.artifacts"), "windows-native-attention-host")
+  await fs.mkdir(directory, { recursive: true })
+  state.cohort = await WindowsNativeCliCohort.build({
+    directory: await fs.realpath(directory),
+    businessEntry: path.resolve(import.meta.dir, "../fixture/attention-host.ts"),
+    extraSources: [path.resolve(import.meta.dir, "../fixture/attention-host.ts")],
+  })
+}, 240_000)
+afterAll(async () => { await state.cohort?.dispose() })
 import {
   seedActivity,
   seedRecovery,
@@ -226,7 +243,7 @@ it.live("the generated SDK preserves real nullable values and changes only the v
     const database = yield* Database.Service
     yield* seedRecovery(database, "sdk-recovery", "claim_only")
     const client = createDeepAgentCodeClient({
-      baseUrl: HttpServer.formatAddress((yield* HttpServer.HttpServer).address),
+      baseUrl: HttpServer.formatAddress((yield* HttpServer.HttpServer).address).replace("http://0.0.0.0", "http://127.0.0.1"),
       headers: { authorization },
       directory: "/tmp/unrelated-project",
     })
@@ -255,7 +272,7 @@ it.live("serves current no-progress action references through the real HTTP hand
     const database = yield* Database.Service
     const source = yield* challenge(database, "http-approval", { project: "project-b", leaseMs: 2000 })
     const client = createDeepAgentCodeClient({
-      baseUrl: HttpServer.formatAddress((yield* HttpServer.HttpServer).address),
+      baseUrl: HttpServer.formatAddress((yield* HttpServer.HttpServer).address).replace("http://0.0.0.0", "http://127.0.0.1"),
       headers: { authorization },
       directory: "/tmp/unrelated-project",
     })
@@ -300,12 +317,49 @@ it.live("serves current no-progress action references through the real HTTP hand
 
 test("warm host keeps explicit local profiles listener-local and starts disabled without a profile", async () => {
   const { mkdtemp, rm } = await import("node:fs/promises")
-  const directory = await mkdtemp("/tmp/attention-host-")
+  const directory = await mkdtemp(path.join(os.tmpdir(), "attention-host-"))
+  if (process.platform === "win32") {
+    const home = state.cohort!.root
+    const result = await state.cohort!.run({
+      env: {
+        HOME: home,
+        USERPROFILE: home,
+        APPDATA: path.join(home, "appdata"),
+        LOCALAPPDATA: path.join(home, "localappdata"),
+        TEMP: home,
+        TMP: home,
+        TMPDIR: home,
+        XDG_DATA_HOME: path.join(home, "data"),
+        XDG_CONFIG_HOME: path.join(home, "config"),
+        XDG_CACHE_HOME: path.join(home, "cache"),
+        XDG_STATE_HOME: path.join(home, "state"),
+        DEEPAGENT_CODE_HOME: path.join(home, "data"),
+        DEEPAGENT_CODE_TEST_HOME: home,
+        DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR: path.join(home, "managed"),
+        DEEPAGENT_CODE_DB: path.join(home, "attention.db"),
+        DEEPAGENT_CODE_ATTENTION_PROFILE: "",
+        DEEPAGENT_CODE_WORKSPACE_ID: "",
+        DEEPAGENT_CODE_GATEWAY: "false",
+        DEEPAGENT_CODE_SERVER_PASSWORD: "test-secret",
+        DEEPAGENT_CODE_SERVER_USERNAME: "operator",
+        DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
+        DEEPAGENT_IM_AGENT_RESPONDER: "off",
+        DEEPAGENT_IM_FACADE_URL: "",
+        DEEPAGENT_IM_FACADE_KEY: "",
+      },
+      inheritEnvironment: false,
+      milliseconds: 60_000,
+    })
+    console.info("WINDOWS_ATTENTION_HOST_RESULT", JSON.stringify(result))
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("ATTENTION_HOST_PROFILE_PASS")
+    return
+  }
   const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../fixture/attention-host.ts")], {
     cwd: path.resolve(import.meta.dir, "../.."),
     env: {
       ...process.env,
-      TMPDIR: "/tmp",
+      TMPDIR: os.tmpdir(),
       DEEPAGENT_CODE_TEST_HOME: directory,
       XDG_DATA_HOME: path.join(directory, "data"),
       XDG_CONFIG_HOME: path.join(directory, "config"),
