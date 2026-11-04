@@ -28,10 +28,14 @@ function app() {
 }
 
 function waitDisposed(directory: string) {
+  const started = Date.now()
   return waitGlobalBusEvent({
+    timeout: process.platform === "win32" ? 30_000 : undefined,
     message: "timed out waiting for instance disposal",
     predicate: (event) => event.payload.type === "server.instance.disposed" && event.directory === directory,
-  })
+  }).pipe(Effect.tap(() => Effect.sync(() => {
+    if (process.env.DAC_CONFIG_NATIVE_CASES === "1") process.stdout.write(`CONFIG_DISPOSAL elapsedMs=${Date.now() - started}\n`)
+  })))
 }
 
 const tmpdirEffect = (options: Parameters<typeof tmpdir>[0]) =>
