@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { ConfigProvider, Context, Effect, Layer, Option, Schema, SubscriptionRef } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Layer, Option, Schema, SubscriptionRef } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { createServer } from "node:http"
@@ -367,7 +367,22 @@ const budget = process.platform === "win32" ? 120_000 : 40_000
 const observationBudget = process.platform === "win32" ? 100_000 : 35_000
 
 const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* () {
-  if (process.env.DAC_IM_MEDIA_BATCH_CHILD === "1") return yield* runBoundary(concurrent, diagnostic)
+  if (process.env.DAC_IM_MEDIA_BATCH_CHILD === "1")
+    return yield* runBoundary(concurrent, diagnostic).pipe(
+      Effect.onError((cause) =>
+        Effect.promise(async () => {
+          const root = process.env.DAC_IM_MEDIA_BATCH_ROOT!
+          // Bounded and redacted: raw media logs can carry auth headers or tokens.
+          const failures = Cause.prettyErrors(cause).map((error) => {
+            const value = error as { name?: unknown; message?: unknown }
+            return {
+              name: String(value.name ?? "Error").slice(0, 80),
+              message: String(value.message ?? error).replace(/[\w-]{24,}/g, "<redacted>").slice(0, 512),
+            }
+          })
+          await Bun.write(path.join(root, "failure-safe.json"), JSON.stringify({ failures }).slice(0, 8192)).catch(() => undefined)
+        })),
+    )
   const root = yield* Effect.acquireRelease(Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-im-media-product-lanes-batch-")))), (root) => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
   const { certificate } = yield* Effect.promise(() => import("../installation/fixture/event-investigation-installation"))
   const tls = yield* Effect.promise(() => certificate(path.join(root, "tls")))
@@ -397,10 +412,14 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
         index: Schema.optional(Schema.Number), expectedBytes: Schema.optional(Schema.Number), success: Schema.optional(Schema.Boolean),
         upload: Schema.optional(Schema.Boolean), send: Schema.optional(Schema.Boolean) })),
     }))(await sdkFile.json().catch(() => undefined))) : undefined
+    const failureFile = Bun.file(path.join(root, "failure-safe.json"))
+    const failure = await failureFile.exists() && failureFile.size <= 8192 ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Struct({
+      failures: Schema.Array(Schema.Struct({ name: Schema.String, message: Schema.String })),
+    }))(await failureFile.json().catch(() => undefined))) : undefined
     // Only these fixture-owned fields leave the child. Raw logs can contain auth
     // headers or tokens and remain private even when the original test times out.
     console.info("owned-media-batch-diagnostic", JSON.stringify({ reason, concurrent, diagnostic, elapsedMs: Date.now() - startedAt,
-      exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk }))
+      exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk, failure }))
   }
   const observation = setTimeout(() => { void diagnose("deadline-observation").catch(() => {}) }, observationBudget)
   observation.unref()

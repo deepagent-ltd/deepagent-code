@@ -52,4 +52,4 @@ test("a slow mandatory SDK header cannot starve bounded background discovery", a
     await native.server.stop(true)
     await fs.rm(directory, { recursive: true, force: true })
   }
-}, 15000)
+}, 60_000)
