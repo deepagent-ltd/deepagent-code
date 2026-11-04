@@ -1,6 +1,9 @@
-export { expect, mock } from "bun:test"
+export { expect, mock, spyOn } from "bun:test"
 
 type Body = () => unknown | Promise<unknown>
+export function describe(_name: string, body: () => void) {
+  body()
+}
 type Options = number | { timeout?: number }
 const cases: { name: string; body: Body; milliseconds: number }[] = []
 const finalizers: { body: Body; milliseconds: number }[] = []

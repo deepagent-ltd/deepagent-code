@@ -1,4 +1,4 @@
-import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
+import { test, expect, describe, afterAll, afterEach, beforeAll, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { Cause, Context, Deferred, Effect, Exit, Layer, Option } from "effect"
 import { InvalidError } from "@deepagent-code/core/v1/config/error"
@@ -43,6 +43,16 @@ import { ConfigPluginV1 } from "@deepagent-code/core/v1/config/plugin"
 import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
+import { EmptySettingsFixture } from "../fixture/empty-settings"
+import { windowsMcpStorage } from "../fixture/windows-mcp-storage"
+
+const windowsConfig = process.platform === "win32" ? await import("../fixture/windows-config") : undefined
+const configStorage = process.env.DAC_CONFIG_NATIVE_CASES === "1"
+  ? windowsMcpStorage
+  : process.platform === "win32" ? EmptySettingsFixture.layer : Layer.empty
+
+beforeAll(() => windowsConfig?.prepare("config"), 240_000)
+afterAll(() => windowsConfig?.dispose())
 
 /** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
 const infra = CrossSpawnSpawner.defaultLayer.pipe(
@@ -112,8 +122,14 @@ const configLayer = (
 
 const layer = configLayer()
 
-const it = testEffect(layer)
-const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(configLayer(options))
+const it = testEffect(layer, configStorage)
+const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(configLayer(options), configStorage)
+const nativeConfigCase = (name: string, source: () => unknown) =>
+  windowsConfig ? windowsConfig.register(name, source) : source()
+const configCase = (name: string, body: Parameters<typeof it.effect>[1], options?: Parameters<typeof it.effect>[2], testIt = it) =>
+  nativeConfigCase(name, () => testIt.effect(name, body, options))
+const rawConfigCase = (name: string, body: Parameters<typeof test>[1]) =>
+  nativeConfigCase(name, () => test(name, body))
 
 const schemaConfig = (config: object) => ({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...config })
 
@@ -151,7 +167,9 @@ const writeConfigEffect = (dir: string, config: object, name = "deepagent-code.j
   FSUtil.use.writeWithDirs(path.join(dir, name), JSON.stringify(config))
 
 const tmpGlobalConfig = () =>
-  process.platform !== "win32"
+  process.env.DAC_CONFIG_NATIVE_CASES === "1"
+    ? Effect.succeed(Global.Path.config)
+    : process.platform !== "win32"
     ? tmpdirScoped()
     : Effect.acquireRelease(
         Effect.promise(async () => {
@@ -311,7 +329,7 @@ it.effect("creates global jsonc config with schema when no global configs exist"
   ),
 )
 
-configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope observation keeps the canonical Add file as its exact source", () =>
+configCase("global MCP scope observation keeps the canonical Add file as its exact source", () =>
   withGlobalConfig({}, ({ dir }) =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
@@ -336,9 +354,11 @@ configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP
       }))
     }),
   ),
+  undefined,
+  configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }),
 )
 
-configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope origins retain each contributing file and canonical precedence", () =>
+configCase("global MCP scope origins retain each contributing file and canonical precedence", () =>
   withGlobalConfig({}, ({ dir }) =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
@@ -365,6 +385,8 @@ configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP
       }))
     }),
   ),
+  undefined,
+  configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }),
 )
 
 configIt({ account: Account.defaultLayer.pipe(Layer.orDie) }).effect("global MCP scope TOML migration records its written file without serializing origins", () =>
@@ -440,7 +462,7 @@ it.instance("updates config and preserves empty shell sentinel", () =>
   }),
 )
 
-it.effect("updates global config and omits empty shell key in json", () =>
+configCase("updates global config and omits empty shell key in json", () =>
   withGlobalConfig({ config: { shell: "bash" } }, ({ dir }) =>
     Effect.gen(function* () {
       yield* Config.use.updateGlobal({ shell: "" })
@@ -451,7 +473,7 @@ it.effect("updates global config and omits empty shell key in json", () =>
   ),
 )
 
-it.effect("updates global config and omits empty shell key in jsonc", () =>
+configCase("updates global config and omits empty shell key in jsonc", () =>
   withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "deepagent-code.jsonc" }, ({ dir }) =>
     Effect.gen(function* () {
       yield* Config.use.updateGlobal({ shell: "" })
@@ -791,7 +813,7 @@ it.effect("consolidates legacy global config files into config.jsonc and removes
   }),
 )
 
-it.effect("merges legacy keys into an existing .jsonc while preserving its comments", () =>
+configCase("merges legacy keys into an existing .jsonc while preserving its comments", () =>
   Effect.gen(function* () {
     const globalDir = yield* tmpGlobalConfig()
     const projectDir = yield* tmpdirScoped()
@@ -1367,7 +1389,7 @@ it.effect("does not install dependencies in a writable DEEPAGENT_CODE_CONFIG_DIR
   }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
 )
 
-test("interrupts background dependency installs when the instance is disposed", async () => {
+rawConfigCase("interrupts background dependency installs when the instance is disposed", async () => {
   const started = Deferred.makeUnsafe<void>()
   const interrupted = Deferred.makeUnsafe<void>()
   const npm = Layer.mock(Npm.Service)({
@@ -1392,6 +1414,7 @@ test("interrupts background dependency installs when the instance is disposed", 
     }).pipe(
       Effect.scoped,
       Effect.provide(configLayer({ npm })),
+      Effect.provide(configStorage),
       Effect.provide(testInstanceStoreLayer),
       Effect.provide(CrossSpawnSpawner.defaultLayer),
     ),
@@ -1402,7 +1425,7 @@ test("interrupts background dependency installs when the instance is disposed", 
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core
 // package's npm tests, not here.
 
-test("does not install plugin dependencies when no config directory hosts plugins", async () => {
+rawConfigCase("does not install plugin dependencies when no config directory hosts plugins", async () => {
   const installed: string[] = []
   const npm = Layer.mock(Npm.Service)({
     install: (dir) =>
@@ -1420,6 +1443,7 @@ test("does not install plugin dependencies when no config directory hosts plugin
     }).pipe(
       Effect.scoped,
       Effect.provide(configLayer({ npm })),
+      Effect.provide(configStorage),
       Effect.provide(testInstanceStoreLayer),
       Effect.provide(CrossSpawnSpawner.defaultLayer),
     ),
@@ -1972,7 +1996,7 @@ trailingSlashWellKnown.it.instance("wellknown URL with trailing slash is normali
   }),
 )
 
-test("remote well-known config can use FetchHttpClient layer", async () => {
+rawConfigCase("remote well-known config can use FetchHttpClient layer", async () => {
   let fetchedUrl: string | undefined
   const server = Bun.serve({
     port: 0,
@@ -2017,6 +2041,7 @@ test("remote well-known config can use FetchHttpClient layer", async () => {
           testInstanceStoreLayer,
         ),
       ),
+      Effect.provide(configStorage),
       Effect.runPromise,
     )
   } finally {
