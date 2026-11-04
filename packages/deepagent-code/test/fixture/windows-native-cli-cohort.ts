@@ -202,6 +202,9 @@ export async function build(input: {
         const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase()) ?? name.toUpperCase()
         env[key] = value
       }
+      // Compiled entries own the original Native settings custody; an inherited source-test
+      // switch must never route them back to plain filesystem reads.
+      env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS = "0"
       for (const name of ["DEEPAGENT_CODE_V2_OWNER_CAMPAIGN", "DEEPAGENT_CODE_V2_OWNER_PUBLIC_KEY"])
         assert(!env[name], "Formal owner material is not accepted by this test cohort")
       for (const name of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",

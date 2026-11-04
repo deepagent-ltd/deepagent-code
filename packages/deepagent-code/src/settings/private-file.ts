@@ -53,9 +53,10 @@ export const parentEffect = (file: string) => Effect.suspend(() => {
 })
 
 /** Source test runs have no compiled Native bootstrap, so they observe the same filesystem
- * contract as POSIX. Every isolated test child already carries DEEPAGENT_CODE_TEST_HOME;
- * production never sets either signal and always uses the Native port. */
+ * contract as POSIX. Compiled cohorts force the value to "0" so inherited test environments
+ * cannot bypass their original Native custody. Production sets neither value. */
 function sourceTestSettings() {
+  if (process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS === "0") return false
   return process.env.DEEPAGENT_CODE_TEST_SOURCE_SETTINGS === "1" ||
     Boolean(process.env.DEEPAGENT_CODE_TEST_HOME)
 }
