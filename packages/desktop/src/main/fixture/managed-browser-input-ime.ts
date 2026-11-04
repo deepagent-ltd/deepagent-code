@@ -71,6 +71,10 @@ async function main() {
   blank.release()
   stage("initial-boundary")
   await window.webContents.executeJavaScript("document.querySelector('input').focus()")
+  // Create the CDP surface before binding the native client: a debugger-driven view replacement
+  // then settles before observation instead of retiring the client during the first input.
+  window.webContents.debugger.attach("1.3")
+  await delay()
   const callbacks: number[] = []
   const sourceCallbacks: { ordinal: number; at: number; wallAt: number }[] = []
   stage("document:observing")
@@ -82,7 +86,6 @@ async function main() {
   })
   assert.equal(lease.healthy(), true)
   if (scenario.startsWith("foreign")) {
-    window.webContents.debugger.attach("1.3")
     await window.webContents.debugger.sendCommand("Input.insertText", { text: "owned" })
     await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x: 12, y: 12, button: "left", clickCount: 1 })
     await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: 12, y: 12, button: "left", clickCount: 1 })
@@ -114,7 +117,6 @@ async function main() {
     return
   }
   stage("cdp:starting")
-  window.webContents.debugger.attach("1.3")
   const cdp: { method: string; callbacks: number; at: number; wallAt: number }[] = []
   for (const [method, parameters] of [
     ["Input.insertText", { text: "owned中文" }],
