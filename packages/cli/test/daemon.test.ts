@@ -97,7 +97,10 @@ describe("daemon Core V2 backend", () => {
 
   it("spawns only the V2 entrypoint and stops the registered process", async () => {
     const daemonLayer = Daemon.layerForEntrypoint(fixtureEntrypoint)
-    const url = await withDaemon((daemon) => daemon.start(), daemonLayer)
+    const url = await withDaemon((daemon) => daemon.start(), daemonLayer).catch(async (error) => {
+      const stages = await readFile(path.join(home, "state", "startup.log"), "utf8").catch(() => "")
+      throw new Error(`V2 startup failed; stages: ${stages.trim().replaceAll("\n", ", ")}`, { cause: error })
+    })
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
 
     const registration = JSON.parse(await readFile(stateFile(), "utf8"))

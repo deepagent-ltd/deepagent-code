@@ -6,6 +6,9 @@ const version = process.env.DEEPAGENT_CODE_DAEMON_FIXTURE_VERSION ?? "local"
 const stateDir = path.join(process.env.DEEPAGENT_CODE_HOME ?? process.cwd(), "state")
 const file = path.join(stateDir, "server.json")
 const passwordFile = path.join(stateDir, "password")
+const trace = (stage: string) => fsSync.appendFileSync(path.join(stateDir, "startup.log"), `${process.pid} ${Date.now()} ${stage}\n`)
+fsSync.mkdirSync(stateDir, { recursive: true })
+trace("entry")
 
 const readRegistration = (): { id?: string } | undefined => {
   try {
@@ -17,6 +20,7 @@ const readRegistration = (): { id?: string } | undefined => {
 const id = randomUUID()
 const owned = () => readRegistration()?.id === id
 
+trace("listen:start")
 const server = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
@@ -31,15 +35,17 @@ const server = Bun.serve({
     return Response.json({ healthy: true })
   },
 })
+trace("listen:ready")
 
-fsSync.mkdirSync(stateDir, { recursive: true })
 const temp = `${file}.${id}.tmp`
 fsSync.writeFileSync(temp, JSON.stringify({ id, version, url: `http://127.0.0.1:${server.port}`, pid: process.pid }), {
   mode: 0o600,
 })
 fsSync.renameSync(temp, file)
+trace("registered")
 
 process.on("SIGTERM", () => {
+  trace("sigterm")
   if (owned()) {
     try {
       fsSync.unlinkSync(file)
