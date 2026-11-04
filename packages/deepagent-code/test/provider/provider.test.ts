@@ -23,6 +23,9 @@ import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
 import { ProviderV2, officialProviderCatalogID } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { windowsMcpStorage } from "../fixture/windows-mcp-storage"
+
+const windowsProvider = process.platform === "win32" ? await import("../fixture/windows-provider") : undefined
 
 const originalEnv = new Map<string, string | undefined>()
 
@@ -56,6 +59,13 @@ const remove = (k: string) =>
     yield* Env.use.remove(k)
   })
 
+const updateSettings = (patch: Parameters<typeof SettingsStore.updateEffect>[0]) =>
+  SettingsStore.updateEffect(patch).pipe(
+    Effect.provide(FSUtil.defaultLayer),
+    Effect.provide(EffectFlock.defaultLayer),
+    Effect.provide(windowsMcpStorage),
+  )
+
 afterEach(async () => {
   discoveryGeneration = 1
   for (const [key, value] of originalEnv) {
@@ -65,7 +75,7 @@ afterEach(async () => {
   originalEnv.clear()
   // Reset any SettingsStore official-transport override written by a test so it can't leak into the
   // next (the store is backed by a shared global file + in-memory cache).
-  await SettingsStore.update({
+  await Effect.runPromise(updateSettings({
     deepagent: {
       promptMode: undefined as never,
       intelligenceModel: undefined as never,
@@ -93,7 +103,7 @@ afterEach(async () => {
         maxRetries: undefined as never,
       },
     },
-  }).catch(() => {})
+  })).catch(() => {})
   SettingsStore.invalidate()
   if (connectedProviders.size > 0) {
     await Effect.runPromise(
@@ -132,11 +142,35 @@ const deepagentAuthProviderFixture = pathToFileURL(
   path.join(import.meta.dir, "../fixture/deepagent-auth-provider.js"),
 ).href
 
-const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, Auth.defaultLayer))
+const it = testEffect(
+  Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, Auth.defaultLayer),
+  windowsMcpStorage,
+)
 const itWithAuth = testEffect(
   Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, Auth.defaultLayer),
+  windowsMcpStorage,
 )
-const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
+const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }), windowsMcpStorage)
+
+const settingsCase = (name: string, body: Parameters<typeof it.instance>[1]) => {
+  if (process.platform !== "win32" || process.env.DAC_PROVIDER_NATIVE_CASES === "1") return it.instance(name, body)
+  return test(name, async () => {
+    const { result, coverage } = await windowsProvider!.run(name)
+    console.info("WINDOWS_PROVIDER_RESULT", JSON.stringify({
+      name,
+      code: result.code,
+      timedOut: result.timedOut,
+      stdoutFile: result.stdoutFile,
+      stderrFile: result.stderrFile,
+    }))
+    expect({ code: result.code, timedOut: result.timedOut, coverage }).toMatchObject({
+      code: 0,
+      timedOut: false,
+      coverage: { expected: 1, registered: 1, executed: 1, pass: true, currentBeforeRetirement: true, retiredReadRejected: true },
+    })
+    expect(coverage.rows).toHaveLength(1)
+  }, 150_000)
+}
 
 // connect() persists fake keys into the shared test-home auth.json. Track every connected
 // provider so afterEach can scrub them — a leaked entry (e.g. openai) makes later test files in
@@ -161,7 +195,7 @@ let discoveryServerURL = ""
 let discoveryEmptyURL = ""
 let discoveryGeneration = 1
 
-beforeAll(() => {
+beforeAll(async () => {
   discoveryServer = Bun.serve({
     port: 0,
     fetch(req) {
@@ -189,10 +223,12 @@ beforeAll(() => {
   })
   discoveryServerURL = `http://localhost:${discoveryServer.port}/v1`
   discoveryEmptyURL = `http://localhost:${discoveryServer.port}/empty`
-})
+  await windowsProvider?.prepare()
+}, 240_000)
 
-afterAll(() => {
+afterAll(async () => {
   discoveryServer?.stop(true)
+  await windowsProvider?.dispose()
 })
 
 // Common model ids a third-party gateway typically forwards; the cross-provider spec-fill test lists
@@ -498,16 +534,14 @@ it.instance(
   },
 )
 
-it.instance(
+settingsCase(
   "official provider baseURL override comes from SettingsStore (the sanctioned channel)",
   Effect.gen(function* () {
     // Config baseURL is ignored for official providers (proven above). The ONE supported way to point
     // an official provider at a proxy / self-hosted gateway / air-gapped mirror is SettingsStore
     // (the connect dialog's advanced section). Written before the provider state materializes, it must
     // land on the resolved provider's options so resolveSDK routes there.
-    yield* Effect.promise(() =>
-      SettingsStore.update({ providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1" } } }),
-    )
+    yield* updateSettings({ providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1" } } })
     SettingsStore.invalidate()
     yield* connect(ProviderV2.ID.openai, "test-openai-key")
     const providers = yield* list
@@ -792,26 +826,24 @@ itWithAuth.instance(
   },
 )
 
-it.instance("settings-only deepagent overlay does not register a connected provider", () =>
+settingsCase("settings-only deepagent overlay does not register a connected provider", () =>
   Effect.gen(function* () {
     yield* remove("DEEPAGENT_API_KEY")
     // Config.get() overlays the SettingsStore DeepAgent runtime settings as a pseudo
     // `provider.deepagent` entry. It must not surface as a connection on its own.
-    yield* Effect.promise(() =>
-      SettingsStore.update({
-        deepagent: { promptMode: "direct", intelligenceModel: "deepseek/deepseek-v4-flash", agentMode: "xhigh" },
-      }),
-    )
+    yield* updateSettings({
+      deepagent: { promptMode: "direct", intelligenceModel: "deepseek/deepseek-v4-flash", agentMode: "xhigh" },
+    })
     SettingsStore.invalidate()
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("deepagent")]).toBeUndefined()
   }),
 )
 
-it.instance("deepagent connects via the auth key store even with settings present", () =>
+settingsCase("deepagent connects via the auth key store even with settings present", () =>
   Effect.gen(function* () {
     yield* remove("DEEPAGENT_API_KEY")
-    yield* Effect.promise(() => SettingsStore.update({ deepagent: { promptMode: "direct", agentMode: "xhigh" } }))
+    yield* updateSettings({ deepagent: { promptMode: "direct", agentMode: "xhigh" } })
     SettingsStore.invalidate()
     yield* connect(ProviderV2.ID.make("deepagent"), "deepagent-api-key")
     const providers = yield* list

@@ -25,9 +25,9 @@ it.live("original listener and QA composition cold roots complete one formal SDK
   const root = yield* Effect.acquireRelease(Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "dac-im-media-product-lanes-"))), (root) => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
   yield* Effect.addFinalizer(() => Effect.promise(async () => {
     for (const lane of ["original", "qa"]) {
-      for (const name of ["child.log", "media-trace-safe.jsonl", "lane-effect-safe.jsonl"]) {
+      for (const name of ["child.log", "media-trace-safe.jsonl", "lane-effect-safe.jsonl", "data/log/dev.log"]) {
         const file = path.join(root, lane, "A", name)
-        if (await Bun.file(file).exists()) await fs.copyFile(file, path.join(os.tmpdir(), `dac-im-media-listener-lanes-${lane}-${name}`))
+        if (await Bun.file(file).exists()) await fs.copyFile(file, path.join(os.tmpdir(), `dac-im-media-listener-lanes-${lane}-${path.basename(name)}`))
       }
     }
   }))
@@ -104,7 +104,10 @@ it.live("original listener and QA composition cold roots complete one formal SDK
     const port = yield* Effect.promise(freePort)
     const log = yield* Effect.acquireRelease(Effect.promise(() => fs.open(path.join(home, "child.log"), "wx", 0o600)), (file) => Effect.promise(() => file.close()))
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DEEPAGENT_") && !key.startsWith("DAC_IM_")))
-    const child = Bun.spawn([process.execPath, "--preload", path.resolve("test/fixture/cli-secret-store.ts"), path.resolve("test/im/fixture/kernel-media-listener-lane.ts"), home, lane], { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
+    const child = Bun.spawn([process.execPath,
+      ...(process.platform === "win32" ? ["--preload", path.resolve("test/fixture/source-empty-settings-preload.ts")] : []),
+      "--preload", path.resolve("test/fixture/cli-secret-store.ts"), path.resolve("test/im/fixture/kernel-media-listener-lane.ts"), home, lane],
+    { cwd: process.cwd(), stdout: log.fd, stderr: log.fd,
       env: { ...env, HOME: home, XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"), XDG_CACHE_HOME: path.join(home, "cache"),
         DEEPAGENT_CODE_TEST_HOME: home, DEEPAGENT_CODE_DB: path.join(home, "data/database.sqlite"), DEEPAGENT_CODE_SERVER_PASSWORD: "private-listener-password",
         DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1", DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1", DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "1", DEEPAGENT_IM_AGENT_RESPONDER: "off",
@@ -112,7 +115,7 @@ it.live("original listener and QA composition cold roots complete one formal SDK
         DAC_IM_DEVICE_DIRECTORY: native.directory, DAC_IM_DEVICE_BACKEND: native.backendFile, NODE_EXTRA_CA_CERTS: native.certificatePath, DAC_IM_HOST_PORT: String(port) } })
     yield* Effect.addFinalizer(() => Effect.promise(async () => { await Bun.write(path.join(home, "stop"), ""); if (child.exitCode === null) await Promise.race([child.exited, Bun.sleep(5000)]); if (child.exitCode === null) child.kill(); await child.exited }))
     const readyFile = path.join(home, "lane-ready-safe.json")
-    yield* pollWithTimeout(Effect.promise(async () => await Bun.file(readyFile).exists() ? true : undefined), "Controlled original listener did not start", "20 seconds")
+    yield* pollWithTimeout(Effect.promise(async () => await Bun.file(readyFile).exists() ? true : undefined), "Controlled original listener did not start", process.platform === "win32" ? "60 seconds" : "20 seconds")
     const ready = yield* Effect.promise(() => Bun.file(readyFile).json())
     expect(ready.databasePathMatches).toBe(true)
     expect(ready.rootBefore.present).toBe(false)
@@ -189,4 +192,4 @@ it.live("original listener and QA composition cold roots complete one formal SDK
       ownedGroupSocketClosed: true, socketStopOrder: lane === "original" ? "held until original listener.stop(true)" : "QA owner closes and joins before Scope.close", ownedChildExit: exit, portBindable: true })
   }
   yield* Effect.promise(() => Bun.write("/tmp/dac-im-media-listener-lanes-controlled-safe.json", JSON.stringify({ scope: "controlled native WS+HTTP only; two cold private roots; no Go/UI/provider; small media eachonce", results }, null, 2)))
-}), 60000)
+}), process.platform === "win32" ? 180_000 : 60_000)

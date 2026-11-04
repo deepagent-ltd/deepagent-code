@@ -1,5 +1,5 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { describe, expect } from "bun:test"
+import { beforeAll, describe, expect } from "bun:test"
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import {
   FetchHttpClient,
@@ -49,17 +49,22 @@ const testStateLayer = Layer.effectDiscard(
 
 const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true })
 
-const it = testEffect(
-  Layer.mergeAll(
-    testStateLayer,
-    NodeHttpServer.layerTest,
-    NodeServices.layer,
-    Database.defaultLayer,
-    Project.defaultLayer,
-    workspaceLayer,
-    Socket.layerWebSocketConstructorGlobal,
-  ),
+const testLayer = Layer.mergeAll(
+  testStateLayer,
+  NodeHttpServer.layerTest,
+  NodeServices.layer,
+  Database.defaultLayer,
+  Project.defaultLayer,
+  workspaceLayer,
+  Socket.layerWebSocketConstructorGlobal,
 )
+const it = testEffect(testLayer)
+
+// Pay the first Windows layer build outside the first case's routing-contract budget.
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  await Effect.runPromise(Effect.scoped(Layer.build(testLayer)))
+}, 60_000)
 
 type ProxiedRequest = {
   url: string

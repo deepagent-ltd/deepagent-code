@@ -376,21 +376,9 @@ async function run(storage?: Layer.Layer<NativeAuthStorage.Services>, nativePort
           const nativeAcl =
             storage && process.platform === "win32"
               ? await (async () => {
-                  const { spawnSync } = await import("node:child_process")
-                  const { MediaFiles } = await import("../../src/im/media-files")
-                  const invocation = MediaFiles.windowsPrivateInvocation(
-                    process.env.SystemRoot ?? "",
-                    file,
-                    false,
-                    false,
-                  )
-                  const checked = spawnSync(invocation.cmd[0], invocation.cmd.slice(1), {
-                    env: invocation.env,
-                    stdio: "ignore",
-                    windowsHide: true,
-                    shell: false,
-                  })
-                  return checked.status === 0
+                  const { WindowsPrivate } = await import("@deepagent-code/core/im/windows-private")
+                  await WindowsPrivate.verify([{ file, directory: false, created: false }])
+                  return true
                 })()
               : undefined
           await Bun.write(

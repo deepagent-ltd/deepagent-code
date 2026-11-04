@@ -1,4 +1,4 @@
-import { afterEach, expect } from "bun:test"
+import { afterEach, beforeAll, expect } from "bun:test"
 import { existsSync, readdirSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -26,6 +26,13 @@ const [
 ])
 
 const it = testEffect(Layer.mergeAll(InstanceLayer.layer, CrossSpawnSpawner.defaultLayer))
+
+// Pay the one-time Windows AppRuntime boot outside the bootstrap-order case budget.
+beforeAll(async () => {
+  if (process.platform !== "win32") return
+  const { AppRuntime } = await import("../../src/effect/app-runtime")
+  await AppRuntime.runPromise(Effect.void)
+}, 60_000)
 
 // InstanceBootstrap must run before any code touches the instance —
 // originally tracked by PRs #25389 and #25449, now a permanent
