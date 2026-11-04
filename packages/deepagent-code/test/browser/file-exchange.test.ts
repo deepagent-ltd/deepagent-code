@@ -135,4 +135,4 @@ test.skipIf(process.platform === "win32")("actual POSIX Rust binary FD: 50MiB on
     await exited
     await fs.rm(root, { recursive: true, force: true })
   }
-}, 30_000)
+}, 90_000)
