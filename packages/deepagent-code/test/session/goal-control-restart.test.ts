@@ -97,6 +97,22 @@ for (const scenario of ["paused", "unknown", "wake-before", "wake-after"] as con
         if (child.exitCode === null) child.kill("SIGKILL")
         await child.exited
       }
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      await removeRoot(root)
     }
   }, 60000)
+
+async function removeRoot(root: string, left = 30): Promise<void> {
+  try {
+    await rm(root, { recursive: true, force: true })
+  } catch (error) {
+    const busy = typeof error === "object" && error !== null && "code" in error && error.code === "EBUSY"
+    // Windows releases the killed fixture's directory handles asynchronously.
+    if (!busy || left <= 1) {
+      if (process.platform === "win32" && busy) return
+      throw error
+    }
+    Bun.gc(true)
+    await Bun.sleep(100)
+    return removeRoot(root, left - 1)
+  }
+}
