@@ -327,8 +327,17 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
         expect(metadata.body.group.id).toBe(group.body.id)
       }
     }
+    yield* pollWithTimeout(
+      request("/api/v1/im/status").pipe(
+        Effect.map((result) => result.status === 200 && result.body.reader?.state === "ready" && result.body.kernel === "connected" ? result : undefined),
+        Effect.catch(() => Effect.succeed(undefined)),
+      ),
+      "Protected reader did not become ready before the media batch send",
+      "20 seconds",
+    )
     const sending = request(`/api/v1/im/groups/${group.body.id}/messages`, post({ senderType: "user", type: "file", content: "private ordered original batch", attachmentIDs: ids, clientRequestID: "private-original-batch" }))
     const response = concurrent ? (yield* Effect.all([sending, Effect.forEach(ids, () => request(`/api/v1/im/groups/${group.body.id}`).pipe(Effect.tap((metadata) => Effect.sync(() => expect(metadata.status).toBe(200)))))], { concurrency: 2 }))[0] : yield* sending
+    if (response.status !== 200) console.info("owned-media-send-refusal", JSON.stringify({ status: response.status, code: response.body.code }))
     expect(response.status).toBe(200)
     expect(response.body.type).toBe("file")
     yield* pollWithTimeout(Effect.sync(() => outbound.count === 1 ? true : undefined), "Original queued media dispatch did not reach its single protobuf publish", "3 seconds")
