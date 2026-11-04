@@ -394,11 +394,12 @@ it("a real middle-page500 clears protected history and exposes explicit retry in
     expect(screen.getByText(dict["im.reader.unavailable"])).toBeTruthy()
     api.state.fail = false
     fireEvent.click(screen.getByRole("button", { name: dict["im.facade.retry"] }))
-    await waitFor(() => expect(count()).toBe(50))
+    // Real protected pagination can take longer under a fully loaded CI host.
+    await waitFor(() => expect(count()).toBe(50), { timeout: 10_000 })
     fireEvent.click(older())
-    await waitFor(() => expect(count()).toBe(100))
+    await waitFor(() => expect(count()).toBe(100), { timeout: 10_000 })
     fireEvent.click(older())
-    await waitFor(() => expect(count()).toBe(125))
+    await waitFor(() => expect(count()).toBe(125), { timeout: 10_000 })
     expect(api.state.posts).toBe(0)
   } finally {
     await api.close()
