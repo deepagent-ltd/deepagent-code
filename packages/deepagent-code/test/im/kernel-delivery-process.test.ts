@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, statSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import os from "node:os"
@@ -206,21 +206,19 @@ test("actual SDK + sync + repository keep ACK-loss and ACK-SQL-failure unknown a
             const p1 =
               scenario === "lost"
                 ? await (async () => {
+                    let ready: unknown
                     for (const attempt of Array.from({ length: 400 }, (_, index) => index)) {
-                      if (
-                        (await Bun.file(path.join(directory, "ready.json")).exists()) ||
-                        first.exitCode !== null ||
-                        first.signalCode !== null
-                      )
-                        break
+                      if (first.exitCode !== null || first.signalCode !== null) break
+                      // The child publishes the path before its JSON bytes are complete.
+                      ready = await Bun.file(path.join(directory, "ready.json")).json().catch(() => undefined)
+                      if (ready) break
                       await Bun.sleep(25)
                     }
-                    if (!(await Bun.file(path.join(directory, "ready.json")).exists())) {
+                    if (!ready) {
                       first.kill("SIGKILL")
                       await first.exited
                       throw new Error(await new Response(first.stderr).text())
                     }
-                    const ready = JSON.parse(readFileSync(path.join(directory, "ready.json"), "utf8"))
                     first.kill("SIGKILL")
                     const [output, errors] = await Promise.all([
                       new Response(first.stdout).text(),
