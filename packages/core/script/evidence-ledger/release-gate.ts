@@ -51,8 +51,11 @@ const tree = git(["rev-parse", "HEAD^{tree}"]) ?? "unknown"
 const dirty = (git(["status", "--porcelain", "--untracked-files=all"]) ?? "").length > 0
 const qualificationDir = option("--qualification-dir")
 const standardDistribution = args.includes("--standard-distribution")
+const unqualifiedRelease = args.includes("--unqualified-release")
 const sourceChecksPath = option("--source-checks")
 const sourceChecksBytes = sourceChecksPath ? await Bun.file(sourceChecksPath).bytes() : undefined
+if (unqualifiedRelease && (standardDistribution || sourceChecksPath || qualificationDir || option("--gates")))
+  throw new Error("unqualified release cannot carry reviewed distribution or qualification evidence")
 if (standardDistribution && (qualificationDir || option("--gates")))
   throw new Error("standard distribution cannot consume reviewed qualification or gate decisions")
 if (standardDistribution && (!option("--asset-manifest") || !packageDirs.length || !option("--evidence") || !sourceChecksPath))
@@ -235,6 +238,7 @@ const child = Bun.spawnSync(
     artifactDir,
     "--require-cli-binary",
     ...(standardDistribution ? ["--standard-distribution"] : []),
+    ...(unqualifiedRelease ? ["--unqualified-release"] : []),
     ...(sourceChecksBytes ? ["--source-checks", path.join(artifactDir, "source-checks.json")] : []),
     // The candidate ledger spawns with cwd=repository; resolve relative inputs here so the
     // packaged-dir/runs paths keep meaning regardless of where the gate was invoked from.

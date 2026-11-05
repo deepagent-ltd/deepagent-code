@@ -1044,6 +1044,7 @@ jobs:
           elif [[ "$RELEASE_REF" == 'refs/heads/main' ]]; then
             args+=(--standard-distribution --source-checks "$RUNNER_TEMP/ri51-source-checks.json")
           elif [[ "$ALLOW_UNQUALIFIED_RELEASE" == 'true' ]]; then
+            args+=(--unqualified-release)
             echo "Unqualified release explicitly authorized; RI-51 gates remain pending." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Non-main release requires an explicit reviewed qualification run" >&2

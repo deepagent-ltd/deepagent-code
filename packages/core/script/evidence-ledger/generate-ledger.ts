@@ -52,6 +52,9 @@ async function digestFile(filename: string | undefined): Promise<string> {
 const manifestPath = requiredOption("--manifest")
 const manifest = decodeEvidenceManifest(await Bun.file(manifestPath).json())
 const standardDistribution = args.includes("--standard-distribution")
+const unqualifiedRelease = args.includes("--unqualified-release")
+if (unqualifiedRelease && standardDistribution)
+  throw new Error("unqualified release cannot also claim standard distribution")
 if (standardDistribution && manifest.gates.some((gate) => gate.status !== "pending" || gate.refs.length !== 0))
   throw new Error("standard distribution cannot replace reviewed gate decisions")
 if (standardDistribution && !manifest.packageDigests["release-assets-manifest"])
@@ -120,10 +123,10 @@ try {
   if (!(error instanceof EvidenceLedgerReleaseGateError)) throw error
   // Main publishes distribution artifacts; a complete, independently reviewed RI-51 campaign
   // is a separate qualification. Preserve its pending status and every integrity blocker.
-  distributionAllowed = standardDistribution && error.blockers.length === 9 &&
+  distributionAllowed = (standardDistribution || unqualifiedRelease) && error.blockers.length === 9 &&
     error.blockers.every((blocker, index) => blocker === `G${index}:pending`)
   console.error(`RI-51 RELEASE-NO-GO: ${error.blockers.join(",")}`)
-  if (distributionAllowed) console.log("Standard distribution integrity checks passed; RI-51 qualification NOT REVIEWED")
+  if (distributionAllowed) console.log(`${unqualifiedRelease ? "Unqualified release explicitly authorized" : "Standard distribution integrity checks passed"}; RI-51 qualification NOT REVIEWED`)
 }
 const body = `${JSON.stringify(ledger, null, 2)}\n`
 const out = option("--out")
