@@ -32,6 +32,7 @@ export const Server = {
     )
     const stop = ListenerStop.make({
       scope,
+      scopeBudgetMs: 2_000,
       unpublish: Effect.sync(() => {
         facts.stages.push("mdns")
       }),
