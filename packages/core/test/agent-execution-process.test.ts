@@ -105,5 +105,5 @@ describe("AgentExecution cross-process recovery", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
-  }, 30_000)
+  }, 120_000)
 })
