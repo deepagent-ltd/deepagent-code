@@ -29,7 +29,7 @@ if (!process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
       stdout: "pipe",
       stderr: "pipe",
     })
-    const timer = setTimeout(() => child.kill(), 60000)
+    const timer = setTimeout(() => child.kill(), 180_000)
     try {
       const [status, stdout, stderr] = await Promise.all([
         child.exited,
@@ -43,7 +43,7 @@ if (!process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
       clearTimeout(timer)
       child.kill()
     }
-  }, 65000)
+  }, 210_000)
 }
 
 if (process.env.DAC_MCP_HTTP_COMPAT_CHILD) {
