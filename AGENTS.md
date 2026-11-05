@@ -134,6 +134,7 @@ const table = sqliteTable("session", {
 - Avoid mocks as much as possible
 - Test actual implementation, do not duplicate logic into tests
 - Bare `bun test` cannot run from repo root (guard: `do-not-run-tests-from-root`); run tests from package dirs like `packages/deepagent-code`, or use the root `bun run test` entry, which delegates to `bun turbo test` and covers every package with a `test` script.
+- Environment-sensitive tests (Native CLI cohort, real subprocess cold starts, long media leases, multi-process recovery) run on real local hardware instead of hosted runners: `bun script/run-ci-stability.ts --platform win32`. The list is `script/ci-stability-manifest.json`; hosted Windows CI ignores those files through `--path-ignore-patterns`.
 
 ## Type Checking
 
