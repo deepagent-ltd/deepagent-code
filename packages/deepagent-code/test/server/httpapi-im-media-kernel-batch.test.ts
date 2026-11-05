@@ -337,7 +337,13 @@ const runBoundary = (concurrent: boolean, diagnostic: boolean) => Effect.gen(fun
     )
     const sending = request(`/api/v1/im/groups/${group.body.id}/messages`, post({ senderType: "user", type: "file", content: "private ordered original batch", attachmentIDs: ids, clientRequestID: "private-original-batch" }))
     const response = concurrent ? (yield* Effect.all([sending, Effect.forEach(ids, () => request(`/api/v1/im/groups/${group.body.id}`).pipe(Effect.tap((metadata) => Effect.sync(() => expect(metadata.status).toBe(200)))))], { concurrency: 2 }))[0] : yield* sending
-    if (response.status !== 200) console.info("owned-media-send-refusal", JSON.stringify({ status: response.status, code: response.body.code }))
+    if (response.status !== 200) {
+      // Bounded and redacted; the refusal shape identifies the exact IM conflict without
+      // exposing headers or tokens.
+      const refusal = JSON.stringify(response.body).replace(/[\w-]{24,}/g, "<redacted>").slice(0, 512)
+      console.info("owned-media-send-refusal", JSON.stringify({ status: response.status, body: refusal }))
+      yield* Effect.promise(() => Bun.write(path.join(root, "send-safe.json"), JSON.stringify({ status: response.status, body: refusal })))
+    }
     expect(response.status).toBe(200)
     expect(response.body.type).toBe("file")
     yield* pollWithTimeout(Effect.sync(() => outbound.count === 1 ? true : undefined), "Original queued media dispatch did not reach its single protobuf publish", "3 seconds")
@@ -416,10 +422,14 @@ const run = (concurrent: boolean, diagnostic = false) => Effect.gen(function* ()
     const failure = await failureFile.exists() && failureFile.size <= 8192 ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Struct({
       failures: Schema.Array(Schema.Struct({ name: Schema.String, message: Schema.String })),
     }))(await failureFile.json().catch(() => undefined))) : undefined
+    const sendFile = Bun.file(path.join(root, "send-safe.json"))
+    const send = await sendFile.exists() && sendFile.size <= 4096 ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Struct({
+      status: Schema.Number, body: Schema.String,
+    }))(await sendFile.json().catch(() => undefined))) : undefined
     // Only these fixture-owned fields leave the child. Raw logs can contain auth
     // headers or tokens and remain private even when the original test times out.
     console.info("owned-media-batch-diagnostic", JSON.stringify({ reason, concurrent, diagnostic, elapsedMs: Date.now() - startedAt,
-      exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk, failure }))
+      exitCode: child.exitCode, exitSignal: child.signalCode, progress: progress ?? { unavailable: true }, sdk, failure, send }))
   }
   const observation = setTimeout(() => { void diagnose("deadline-observation").catch(() => {}) }, observationBudget)
   observation.unref()
