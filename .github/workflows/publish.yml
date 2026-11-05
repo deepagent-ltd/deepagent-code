@@ -359,6 +359,13 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
+      - name: Restore the committed lockfile after Windows dependency installation
+        shell: bash
+        # bun install --linker hoisted records Windows-only optional resolutions in
+        # bun.lock. The frozen release build requires the committed source bytes, and
+        # node_modules is already installed from this lockfile.
+        run: git checkout -- bun.lock
+
       - name: Setup git committer
         id: committer
         uses: ./.github/actions/setup-git-committer
