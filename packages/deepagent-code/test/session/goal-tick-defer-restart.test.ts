@@ -199,16 +199,18 @@ async function fixture() {
       const stdout = new Response(child.stdout).text()
       const stderr = new Response(child.stderr).text()
       const deadline = performance.now() + 15_000
-      while (!(await Bun.file(ready).exists())) {
+      // The child publishes the path before its JSON bytes are complete; retry until it parses.
+      let signal: { pid: number; now: number } | undefined
+      while (!signal) {
         if (child.exitCode !== null) throw new Error(`Goal defer fixture exited: ${await stdout}\n${await stderr}`)
         if (performance.now() > deadline) {
           child.kill("SIGKILL")
           await child.exited
           throw new Error(`Goal defer fixture timed out: ${await stdout}\n${await stderr}`)
         }
-        await Bun.sleep(20)
+        signal = await Bun.file(ready).json().catch(() => undefined)
+        if (!signal) await Bun.sleep(20)
       }
-      const signal: { pid: number; now: number } = await Bun.file(ready).json()
       expect(signal).toMatchObject({ pid: child.pid, now })
       console.log(
         "GOAL_DEFER_RUNTIME_STAGE",
