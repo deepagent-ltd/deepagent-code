@@ -2,12 +2,13 @@ import { expect, test } from "bun:test"
 import { Effect, Scope } from "effect"
 import { ListenerStop } from "../../src/server/listener-stop"
 
-function fixture(finalizer: Effect.Effect<void>, onTimeout?: () => void) {
+function fixture(finalizer: Effect.Effect<void>, onTimeout?: () => void, scopeBudgetMs?: number) {
   const scope = Scope.makeUnsafe()
   const stages: string[] = []
   const close = Scope.addFinalizer(scope, finalizer)
   const stop = ListenerStop.make({
     scope,
+    scopeBudgetMs,
     unpublish: Effect.sync(() => {
       stages.push("mdns")
     }),
@@ -76,7 +77,7 @@ for (const reason of ["failed", "interrupted"] as const) {
   })
 }
 
-test("the production two-second budget caches failure while the original Scope can settle late", async () => {
+test("a bounded scope budget caches failure while the original Scope can settle late", async () => {
   const release = Promise.withResolvers<void>()
   const settled = Promise.withResolvers<void>()
   const facts = { entered: 0, diagnostics: 0 }
@@ -90,6 +91,7 @@ test("the production two-second budget caches failure while the original Scope c
       facts.diagnostics++
       throw new Error("Diagnostic must not affect shutdown")
     },
+    2_000,
   )
   await Effect.runPromise(entry.close)
   const started = performance.now()
