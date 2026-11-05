@@ -212,8 +212,11 @@ const targets = (
 const binaries: Record<string, string> = {}
 if (!skipInstall) {
   // Explicit package installs must preserve the frozen manifest and lockfile bytes.
-  await $`bun install --no-save --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
-  await $`bun install --no-save --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
+  // Windows CI installs with the hoisted linker; keep that layout here so these
+  // additive installs cannot relink the workspace and drop its package symlinks.
+  const linker = process.platform === "win32" ? ["--linker", "hoisted"] : []
+  await $`bun install --no-save ${linker} --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
+  await $`bun install --no-save ${linker} --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
   // fff embeds its native lib per compile target through a `with { type: "file" }` import
   // (@ff-labs/fff-bun src/embedded.ts). The bundler folds process.platform/arch to the
   // compile target, so every cross target (win32 included) hard-fails resolution with
@@ -223,7 +226,7 @@ if (!skipInstall) {
   // install from rewriting core's package.json/lockfile when the pinned version drifts
   // from what the catalog resolved (P2-5: no silent manifest mutation from a build step).
   const corePkg = JSON.parse(readFileSync(path.resolve(dir, "../core/package.json"), "utf8"))
-  await $`bun install --no-save --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
+  await $`bun install --no-save ${linker} --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
   const name = [
