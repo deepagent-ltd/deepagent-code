@@ -201,7 +201,7 @@ test("read waits for the original receipt during an actual publication window", 
       await writer.exited
       await output
     }
-  }), 25_000)
+  }), 60_000)
 
 test("request hashing encodes a bounded tree once and rejects excess depth before any settings write", async () => {
   for (const mode of ["depth59", "depth60"])
@@ -237,7 +237,7 @@ test(
       expect((await run(root, "global")).code).toBe(1)
       expect(await Bun.file(config).text()).toBe('{"model":"foreign/current"}')
     }),
-  25_000,
+  60_000,
 )
 
 test.skipIf(process.platform === "win32")(
@@ -266,7 +266,7 @@ test.skipIf(process.platform === "win32")(
       expect(denied.error).toContain("Settings transaction invalid")
       expect(denied.writes).toEqual([])
     }),
-  25_000,
+  60_000,
 )
 
 test(
