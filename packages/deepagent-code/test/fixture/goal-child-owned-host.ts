@@ -58,7 +58,9 @@ const provider = createServer(async (request, response) => {
                     function: {
                       name: "bash",
                       arguments: JSON.stringify({
-                        command: `printf executed > '${path.join(root, "executed")}'`,
+                        // Double-quoted JSON-escaped path: Git Bash unescapes it, while a raw
+                        // single-quoted Windows path can be mangled by MSYS translation.
+                        command: `echo executed > ${JSON.stringify(path.join(root, "executed"))}`,
                         description: "Controlled local marker",
                       }),
                     },
