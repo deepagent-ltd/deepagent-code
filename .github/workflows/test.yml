@@ -107,6 +107,11 @@ jobs:
       - name: Run test fixture gate
         run: bun script/check-test-fixtures.ts
 
+      - name: Validate the local CI stability manifest
+        # Environment-sensitive files stay on real local hardware; the manifest must
+        # still point at tracked test files so the Windows cloud legs ignore real work.
+        run: bun script/run-ci-stability.ts --validate
+
   manifest-digest-gate:
     name: manifest-digest-gate
     # K-05/B-11: the C7-10 deterministic manifest must reproduce from the committed
@@ -329,6 +334,14 @@ jobs:
             else
               dac_test_command+=("--shard=$DAC_TEST_SHARD/$DAC_TEST_SHARDS")
             fi
+          fi
+          # Hosted Windows runners cannot rebuild the sealed Native CLI these files
+          # exercise per file, and they cannot honor the long media/process budgets.
+          # Those files run on real local hardware via script/run-ci-stability.ts.
+          if [[ "$RUNNER_OS" == 'Windows' && -z "$DAC_TEST_FILE" && -z "$DAC_TEST_NAME" && ( "$DAC_TEST_SUITE" == 'core' || "$DAC_TEST_SUITE" == 'cli' ) ]]; then
+            while IFS= read -r dac_stability_pattern; do
+              dac_test_command+=(--path-ignore-patterns "$dac_stability_pattern")
+            done < <(bun script/run-ci-stability.ts --print-ignore-patterns --platform win32 --package "$dac_test_directory")
           fi
           if [[ -n "$DAC_TEST_NAME" ]]; then
             dac_test_command+=(--test-name-pattern "$DAC_TEST_NAME")

@@ -1,0 +1,613 @@
+{
+  "$comment": "Environment-sensitive tests that run on real local hardware instead of hosted CI. The Windows unit legs ignore these files with --path-ignore-patterns; script/run-ci-stability.ts runs them with generous budgets on the RTX KVM or the Mac mini. Logic and integration coverage stays in .github/workflows/test.yml.",
+  "entries": [
+    {
+      "package": "packages/core",
+      "file": "test/agent-execution-process.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "multi-process-recovery"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "script/windows-compiler-bun-capture.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "script/windows-native-publisher-host.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "src/agent/__tests__/subagent-permissions.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/browser/http-closed.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "timing-budget"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/acp/config-options.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/acp/initialize-auth.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/acp/lifecycle.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/acp/prompt-content.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/acp/skills.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/docs.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/goal-control.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/goal-worktree.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/help/help-snapshots.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/mcp-add.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/mcp-catalog.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/mcp-edit.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/mcp-remove.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/query-commands.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/run/run-process.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/run/run-timeout.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/kill9-redrive.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/live-context-authority.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/packaged-composition-digest.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/packaged-fork.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/prompt-prepare.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/proxy-gateway-smoke.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/serve-file-db.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/serve/serve-process.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/session-rename-archive.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/cli/smokes/read-only.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/config/config.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/config/file-write.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/context-federation/v2-runner-frame.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "timing-budget"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/device-activation.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "timing-budget"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/kernel-delivery-process.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/kernel-media-resume-http.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/kernel-reader-checkpoint.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/kernel-reader-header-progress.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/im/kernel-reader-registry.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/installation/native-installation.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/installation/provider-credential-file.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/installation/work-leaf-proof-diagnostic.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/auth-scope.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/auth.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/http-current-auth.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/local-operator.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/oauth-auto-connect.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/oauth-browser.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/oauth-callback-multiprocess.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/oauth-journal-http.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/oauth-scope.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/readonly-http.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/secret-migration-http.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/mcp/secret-migration.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/provider/provider.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-attention.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-config.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-exercise-cleanup.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-delivery.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-media-kernel-batch.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-media-listener-lanes.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-media-multiple.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-media.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-im-reader-lease.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-maintenance-boot.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "long-media-lease"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-mcp-config-remove.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-mdns.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "timing-budget"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/task-tui-private.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "timing-budget"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/session/event-work-repository.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/session/goal-child-owned-e2e.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/session/goal-control-restart.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/session/goal-plan-rebase.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/session/goal-tick-defer-restart.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/settings/store.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/settings/transaction.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-cli-cohort"
+    }
+  ]
+}
