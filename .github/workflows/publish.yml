@@ -46,6 +46,12 @@ permissions:
   contents: write
   packages: write
 
+env:
+  # Release jobs push candidate refs and tags from CI. The developer pre-push hook
+  # runs a full turbo typecheck that cannot fit a 4-vCPU hosted runner; the release
+  # candidate is already pinned by prepareReleaseFiles and the boundary gate.
+  HUSKY: "0"
+
 jobs:
   version:
     runs-on: ubuntu-24.04
