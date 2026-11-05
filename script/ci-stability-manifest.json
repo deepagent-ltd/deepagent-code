@@ -331,6 +331,14 @@
     },
     {
       "package": "packages/deepagent-code",
+      "file": "test/installation/native-node-installation.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "native-node-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
       "file": "test/installation/provider-credential-file.test.ts",
       "platforms": [
         "win32"
@@ -536,6 +544,14 @@
         "win32"
       ],
       "reason": "native-cli-cohort"
+    },
+    {
+      "package": "packages/deepagent-code",
+      "file": "test/server/httpapi-mcp.test.ts",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "subprocess-cold-start"
     },
     {
       "package": "packages/deepagent-code",
