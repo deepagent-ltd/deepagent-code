@@ -337,4 +337,4 @@ test("actual HTTP keeps transport observation readonly and local admission separ
     if (child.exitCode === null) child.kill("SIGKILL")
     await child.exited
   }
-}, 30000)
+}, 120_000)

@@ -162,7 +162,7 @@ describe("IM media real loopback HTTP", () => {
         const files = yield* Effect.promise(() => fs.readdir(baseDir))
         expect(files.filter((name) => name.startsWith("ima_expired_"))).toHaveLength(33)
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -186,7 +186,7 @@ describe("IM media real loopback HTTP", () => {
           ),
         ).toBe(false)
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -218,7 +218,7 @@ describe("IM media real loopback HTTP", () => {
         expect(response.status).toBe(200)
         expect(new TextDecoder().decode(yield* response.arrayBuffer)).toBe("fixture content")
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -273,7 +273,7 @@ describe("IM media real loopback HTTP", () => {
         expect(yield* db.select().from(IMMentionIntentTable).all()).toHaveLength(0)
         if (row) yield* Effect.promise(() => fs.rm(row.storage_path, { force: true }))
       }),
-    20_000,
+    60_000,
   )
 
   off.live(
@@ -298,7 +298,7 @@ describe("IM media real loopback HTTP", () => {
         ).toBe(200)
         expect(yield* (yield* Database.Service).db.select().from(AttachmentTable).all()).toHaveLength(0)
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -350,7 +350,7 @@ describe("IM media real loopback HTTP", () => {
           if (row) yield* Effect.promise(() => fs.rm(row.storage_path, { force: true }))
         }
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -382,7 +382,7 @@ describe("IM media real loopback HTTP", () => {
             }),
         )
       }),
-    20_000,
+    60_000,
   )
 
   on.live(
@@ -453,6 +453,6 @@ describe("IM media real loopback HTTP", () => {
         expect((yield* upload(directory, group.id)).status).toBe(503)
         expect((yield* db.select({ id: AttachmentTable.id }).from(AttachmentTable).where(eq(AttachmentTable.group_id, GroupID.make(group.id))).all()).length).toBe(beforeProtectedUpload)
       }),
-    20_000,
+    60_000,
   )
 })

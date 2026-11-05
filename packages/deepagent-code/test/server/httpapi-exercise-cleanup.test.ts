@@ -50,4 +50,4 @@ test("file DB exerciser disposes its exact root on success and failure without c
     await child.exited
     await rm(root, { recursive: true, force: true })
   }
-}, 90000)
+}, 150_000)

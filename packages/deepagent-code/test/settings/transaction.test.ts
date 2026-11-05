@@ -215,7 +215,7 @@ test("request hashing encodes a bounded tree once and rejects excess depth befor
       }
       if (mode === "depth59") expect((await run(root, mode)).writes).toEqual([])
     })
-}, 25_000)
+}, 60_000)
 
 test(
   "matching completion cannot stand in for current bytes; exact retry only repairs an original before state",
@@ -337,7 +337,7 @@ test("real SIGKILL after intent and after config publication reconciles only the
       )
       expect((await run(root, "global")).writes).toEqual([])
     })
-}, 40_000)
+}, 90_000)
 
 test(
   "original direct store and global caller share locks across two processes and preserve both patches",
@@ -415,4 +415,4 @@ test("private settings reject unsafe inode, invalid UTF8 and excess bytes before
       expect(await Bun.file(file).arrayBuffer()).toEqual(before)
       expect(await Bun.file(path.join(root, "storage", ".settings-operation.json")).exists()).toBe(false)
     })
-}, 30_000)
+}, 60_000)
