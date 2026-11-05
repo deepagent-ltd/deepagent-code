@@ -52,7 +52,7 @@ export function make(input: {
             .then(() => input.onTimeout?.())
             .catch(() => undefined)
           reject(new Error({ reason: "timeout", stage: "scope" }))
-        }, input.scopeBudgetMs ?? 15_000)
+        }, input.scopeBudgetMs ?? 2_000)
       })
       return Promise.race([completed, deadline]).finally(() => clearTimeout(timer))
     })

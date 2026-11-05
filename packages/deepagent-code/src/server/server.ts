@@ -438,6 +438,7 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
 function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
   return ListenerStop.make({
     ...state,
+    scopeBudgetMs: 15_000,
     unpublish: unpublishMdns,
     onTimeout: () => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 15_000 }),
   })
