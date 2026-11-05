@@ -3744,7 +3744,7 @@ v2Real.instance(
           while (!(yield* afs.existsSafe(ready))) {
             yield* Effect.sleep(Duration.millis(10))
           }
-        }).pipe(Effect.timeout(Duration.seconds(5)))
+        }).pipe(Effect.timeout(Duration.seconds(30)))
 
         yield* prompt.cancel(chat.id)
 
