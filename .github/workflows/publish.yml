@@ -905,6 +905,11 @@ jobs:
           path: /tmp/desktop
           merge-multiple: true
 
+      - name: Restore executable bits on downloaded CLI artifacts
+        # Artifact archives do not preserve the executable bit; the frozen runtime
+        # probe and the packaged smoke both spawn these binaries directly.
+        run: chmod +x packages/deepagent-code/dist/deepagent-code-linux*/bin/* packages/cli/dist/*/bin/* 2>/dev/null || true
+
       - name: Setup git committer
         id: committer
         uses: ./.github/actions/setup-git-committer
