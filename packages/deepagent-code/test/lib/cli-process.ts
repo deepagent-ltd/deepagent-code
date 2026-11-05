@@ -336,7 +336,9 @@ export function withCliFixture<A, E>(
     const spawn = Effect.fn("deepagentCode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
       // Native CLI cold starts include real migration and image verification on Windows CI.
-      const timeoutMs = opts?.timeoutMs ?? (process.platform === "win32" ? 60_000 : 30_000)
+      // Hosted runner cold starts (migration + image verification) exceed the old POSIX 30 s
+      // bound under load; the per-case harness still fails a genuinely hung CLI.
+      const timeoutMs = opts?.timeoutMs ?? 60_000
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
