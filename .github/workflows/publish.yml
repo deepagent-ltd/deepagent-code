@@ -26,6 +26,11 @@ on:
         description: "Completed candidate-SHA qualification run carrying release-qualification-v2 (required for release GO)"
         required: false
         type: string
+      allow_unqualified_release:
+        description: "Explicitly authorize a non-main release without a reviewed qualification run; RI-51 gates stay pending"
+        required: false
+        type: boolean
+        default: false
       owner_authorization_json:
         description: "Original PUBLIC owner authorization JSON for retrying an existing release draft"
         required: false
@@ -1014,6 +1019,7 @@ jobs:
         if: needs.version.outputs.release
         env:
           QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          ALLOW_UNQUALIFIED_RELEASE: ${{ inputs.allow_unqualified_release }}
           RELEASE_REF: ${{ github.ref }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
@@ -1037,6 +1043,8 @@ jobs:
               --qualification-run-id "$QUALIFICATION_RUN_ID" --qualification-repo "$GH_REPO")
           elif [[ "$RELEASE_REF" == 'refs/heads/main' ]]; then
             args+=(--standard-distribution --source-checks "$RUNNER_TEMP/ri51-source-checks.json")
+          elif [[ "$ALLOW_UNQUALIFIED_RELEASE" == 'true' ]]; then
+            echo "Unqualified release explicitly authorized; RI-51 gates remain pending." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Non-main release requires an explicit reviewed qualification run" >&2
             exit 1
