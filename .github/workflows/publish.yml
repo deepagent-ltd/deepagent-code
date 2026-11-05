@@ -388,6 +388,14 @@ jobs:
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
 
+      - name: Install zip for the Windows CLI archive
+        shell: pwsh
+        run: |
+          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
+            choco install zip --yes --no-progress
+          }
+          Get-Command zip
+
       - name: Build (release identity pinned, native)
         shell: bash
         run: |
