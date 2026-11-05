@@ -439,7 +439,7 @@ function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
   return ListenerStop.make({
     ...state,
     unpublish: unpublishMdns,
-    onTimeout: () => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 2_000 }),
+    onTimeout: () => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 15_000 }),
   })
 }
 
