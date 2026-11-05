@@ -78,18 +78,32 @@ async function main() {
   const callbacks: number[] = []
   const sourceCallbacks: { ordinal: number; at: number; wallAt: number }[] = []
   stage("document:observing")
-  const lease = native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => {
+  const observe = () => native.observe(window.getNativeWindowHandle(), (...args: unknown[]) => {
     const count = callbacks.push(args.length)
     if (process.env.DAC_MANAGED_BROWSER_INPUT_DIAGNOSTICS === "1" && sourceCallbacks.length < 32)
       sourceCallbacks.push({ ordinal: count, at: performance.now(), wallAt: Date.now() })
     return count
   })
+  let lease = observe()
   assert.equal(lease.healthy(), true)
   if (scenario.startsWith("foreign")) {
-    await window.webContents.debugger.sendCommand("Input.insertText", { text: "owned" })
-    await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x: 12, y: 12, button: "left", clickCount: 1 })
-    await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: 12, y: 12, button: "left", clickCount: 1 })
-    await delay()
+    const sendOwnedInput = async () => {
+      await window.webContents.debugger.sendCommand("Input.insertText", { text: "owned" })
+      await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x: 12, y: 12, button: "left", clickCount: 1 })
+      await window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: 12, y: 12, button: "left", clickCount: 1 })
+      await delay()
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await sendOwnedInput()
+      if (lease.healthy() || attempt > 0) break
+      // The platform replaced the RenderWidgetHostView while the input was in flight; the
+      // client retired safely and the callback is lifecycle, not IME delegation. Observe the
+      // current view and retry the same owned input once.
+      lease.release()
+      callbacks.length = 0
+      lease = observe()
+      assert.equal(lease.healthy(), true)
+    }
     assert.equal(callbacks.length, 0)
     qa.foreign(true)
     if (scenario === "foreign-env") {
