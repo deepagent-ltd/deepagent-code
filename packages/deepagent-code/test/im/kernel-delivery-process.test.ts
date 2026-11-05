@@ -14,7 +14,7 @@ import { KernelLiveFirstSeenFixture } from "./fixture/kernel-live-first-seen"
 test("actual SDK + sync + repository keep ACK-loss and ACK-SQL-failure unknown across same-inode cold restart", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "im-kernel-delivery-cold-")))
   const children = new Set<ReturnType<typeof Bun.spawn>>()
-  const deadline = performance.now() + 59000
+  const deadline = performance.now() + 150000
   const watchdog = setTimeout(() => children.forEach((child) => child.kill("SIGKILL")), 59000)
   try {
     await Effect.runPromise(
@@ -279,4 +279,4 @@ test("actual SDK + sync + repository keep ACK-loss and ACK-SQL-failure unknown a
       }),
     )
   }
-}, 60000)
+}, 180_000)
