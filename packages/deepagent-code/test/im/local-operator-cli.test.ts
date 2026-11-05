@@ -5,7 +5,10 @@ import path from "node:path"
 import { Database } from "bun:sqlite"
 import { WorkAuthorityPolicy } from "@deepagent-code/core/session/work-authority-policy"
 
-test("source CLI rejects retired enrollment and rotates/revokes Core-prepared credentials with exact retries", async () => {
+// The operator CLI enrolls a private LocalAuthority installation; on Windows that custody is the
+// compiled Native port, so a source child cannot enroll. Windows custody is covered by the
+// compiled installation/work-source cohorts.
+test.skipIf(process.platform === "win32")("source CLI rejects retired enrollment and rotates/revokes Core-prepared credentials with exact retries", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dac-operator-cli-")))
   await Promise.all(
     ["home", "tmp", "config", "data", "cache", "state", "project"].map((name) => fs.mkdir(path.join(root, name))),

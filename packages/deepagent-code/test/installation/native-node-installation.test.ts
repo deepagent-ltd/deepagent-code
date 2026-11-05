@@ -91,31 +91,41 @@ test(
             fs.copyFile(path.join(path.dirname(bootstrap.filename), file), path.join(directory, file)),
           ),
         )
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            path.join(repository, "packages/deepagent-code/script/sign-native-node.ts"),
-            "--module",
-            module,
-            "--runtime",
-            runtime,
-            "--key",
-            path.join(root, "publisher-key.pem"),
-            "--release",
-            "private-node-module",
-          ],
-          {
-            cwd: repository,
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-        )
-        const [code, stdout, stderr] = await Promise.all([
-          child.exited,
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-        ])
-        expect(code, stdout + stderr).toBe(0)
+        const attempt = async () => {
+          const child = Bun.spawn(
+            [
+              process.execPath,
+              path.join(repository, "packages/deepagent-code/script/sign-native-node.ts"),
+              "--module",
+              module,
+              "--runtime",
+              runtime,
+              "--key",
+              path.join(root, "publisher-key.pem"),
+              "--release",
+              "private-node-module",
+            ],
+            {
+              cwd: repository,
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          )
+          const [code, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ])
+          return { code, stdout, stderr }
+        }
+        const first = await attempt()
+        // AV/Defender can make the first publisher capture observation unavailable on hosted
+        // Windows; retry once and keep the original diagnostics for the real assertion.
+        const result =
+          first.code !== 0 && first.stderr.includes("Windows offline publisher observation is unavailable")
+            ? await attempt()
+            : first
+        expect(result.code, result.stdout + result.stderr).toBe(0)
         const signed = (await Bun.file(`${module}${NativeInstallationSchema.SIDECAR_SUFFIX}`).json()) as Awaited<
           ReturnType<typeof signNativeNodeArtifact>
         >
