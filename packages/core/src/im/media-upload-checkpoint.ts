@@ -140,10 +140,13 @@ export const updateAttempt = (runtime:KernelReader.Runtime,original:MediaUploadC
   return yield* engine.db.transaction((tx) => Effect.gen(function* () {
     yield* fence(tx,runtime,current)
     const found = yield* read(tx,original.origin.attachment.id)
-    if (!found || found.value.attemptOwner !== original.attemptOwner || found.value.attemptRevision !== original.attemptRevision || found.value.currentSourceHash !== KernelDelivery.hash(current.source) || found.value.planHash !== original.planHash || found.value.attemptExpiresAt === null || found.value.attemptExpiresAt <= Date.now()) return yield* MediaUploadCheckpointModel.conflict()
+    // The same owner and revision identify the in-flight attempt even when its 30 s lease lapsed;
+    // a newer claim increments the revision and still fences this attempt out. Renewing on every
+    // write keeps a slow local verification from invalidating its own upload half-way through.
+    if (!found || found.value.attemptOwner !== original.attemptOwner || found.value.attemptRevision !== original.attemptRevision || found.value.currentSourceHash !== KernelDelivery.hash(current.source) || found.value.planHash !== original.planHash) return yield* MediaUploadCheckpointModel.conflict()
     yield* emptyBusiness(tx,found.value.plan!.messageID)
     if (update.remote && found.value.remote && MediaUploadCheckpointModel.remoteHash(update.remote) !== found.value.remoteHash) return yield* MediaUploadCheckpointModel.conflict()
-    const changed = {...found.value,...update,remoteHash:MediaUploadCheckpointModel.remoteHash(update.remote ?? found.value.remote),...(release?{attemptOwner:null,attemptExpiresAt:null}:{})}
+    const changed = {...found.value,...update,remoteHash:MediaUploadCheckpointModel.remoteHash(update.remote ?? found.value.remote),...(release?{attemptOwner:null,attemptExpiresAt:null}:{attemptExpiresAt:Date.now()+30_000})}
     const result = yield* rewrite(tx,found,changed)
     yield* fence(tx,runtime,current)
     return result
