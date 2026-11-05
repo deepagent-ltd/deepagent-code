@@ -234,7 +234,8 @@ try {
     "child session did not survive restart",
   )
   await second.page
-    .getByText("Cold-start researcher")
+    .getByRole("button", { name: /Cold-start researcher/ })
+    .first()
     .waitFor({ state: "visible", timeout: 30_000 })
     .catch(async (error) => {
       console.error("Electron cold-start diagnostics", {
